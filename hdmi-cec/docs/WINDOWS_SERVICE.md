@@ -18,6 +18,20 @@
 `HdmiCecHost` под `LocalSystem`, регистрирует источник Event Log и запускает службу.
 Этот первый запуск имеет причину `Demand`, поэтому сам по себе ТВ не включает.
 
+## Запуск без установки (отладка)
+
+```powershell
+.\hdmi-cec.exe run            # хост в этом окне, логи в консоль, Ctrl+C — выход
+.\hdmi-cec.exe run --auto     # то же + сразу последовательность on → задержка → input
+.\hdmi-cec.exe run --config C:\temp\test.json
+```
+
+Права администратора не нужны. Хост использует тот же pipe, поэтому в другом окне
+работают `.\hdmi-cec.exe on|off|input HDMI2|status`. Конфиг по умолчанию —
+`%AppData%\HdmiCecHost\config.json`, отдельный от службы. Pipe доступен только
+текущему пользователю. Если служба установлена и запущена, pipe занят: сначала
+`Stop-Service HdmiCecHost`.
+
 ## Выбор входа и управление
 
 ```powershell

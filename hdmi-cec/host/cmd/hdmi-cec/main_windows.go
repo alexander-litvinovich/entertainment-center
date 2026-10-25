@@ -3,11 +3,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"hdmi-cec-host/internal/ipc"
 	"hdmi-cec-host/internal/winhost"
 	"os"
+	"os/signal"
+	"path/filepath"
 	"strings"
 )
 
@@ -28,6 +32,8 @@ func run(args []string) error {
 			return fmt.Errorf("ProgramData is not set")
 		}
 		return winhost.RunService(winhost.DefaultConfigPath(programData))
+	case "run":
+		return runConsole(args[1:])
 	case "install":
 		return winhost.Install()
 	case "uninstall":
@@ -46,6 +52,22 @@ func run(args []string) error {
 		return usage()
 	}
 }
+func runConsole(args []string) error {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return err
+	}
+	flags := flag.NewFlagSet("run", flag.ContinueOnError)
+	auto := flags.Bool("auto", false, "run the boot/resume sequence (on, delay, saved input) at start")
+	config := flags.String("config", filepath.Join(dir, "HdmiCecHost", "config.json"), "config file")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		return usage()
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	return winhost.RunConsole(ctx, *config, *auto)
+}
+
 func send(request ipc.Request) error {
 	response, err := winhost.Send(request)
 	if err != nil {
@@ -61,5 +83,5 @@ func send(request ipc.Request) error {
 	return nil
 }
 func usage() error {
-	return fmt.Errorf("usage: hdmi-cec <on|off|input HDMI1..HDMI4|input 2.1.0.0|status|install|uninstall|service>")
+	return fmt.Errorf("usage: hdmi-cec <on|off|input HDMI1..HDMI4|input 2.1.0.0|status|run [--auto] [--config file]|install|uninstall|service>")
 }

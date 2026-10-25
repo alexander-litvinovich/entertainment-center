@@ -45,7 +45,7 @@ func (h serviceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, s
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	server, err := StartPipeServer(ctx, controller)
+	server, err := StartPipeServer(ctx, controller, pipeSDDL)
 	if err != nil {
 		logger.Error("start named pipe: " + err.Error())
 		return false, 3

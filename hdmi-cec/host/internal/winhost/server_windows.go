@@ -25,9 +25,9 @@ type PipeServer struct {
 	wg         sync.WaitGroup
 }
 
-func StartPipeServer(ctx context.Context, controller *core.Controller) (*PipeServer, error) {
+func StartPipeServer(ctx context.Context, controller *core.Controller, sddl string) (*PipeServer, error) {
 	// go-winio creates pipes with FILE_PIPE_REJECT_REMOTE_CLIENTS.
-	listener, err := winio.ListenPipe(ipc.PipeName, &winio.PipeConfig{SecurityDescriptor: pipeSDDL, InputBufferSize: 4096, OutputBufferSize: 4096})
+	listener, err := winio.ListenPipe(ipc.PipeName, &winio.PipeConfig{SecurityDescriptor: sddl, InputBufferSize: 4096, OutputBufferSize: 4096})
 	if err != nil {
 		return nil, err
 	}

@@ -1,57 +1,56 @@
-# Прошивка hdmi-cec
+# hdmi-cec firmware
 
-Прошивка USB-адаптера HDMI-CEC на Seeed Studio XIAO RP2350. Она пассивна: сама ничего не
-отправляет, а по USB-консоли принимает от хост-приложения CEC-кадры и возвращает результат
-передачи (`ack`, `nack`, `busy`, `timeout`, `collision`, `error`).
+Firmware for an HDMI-CEC USB adapter on the Seeed Studio XIAO RP2350. It is passive: it never
+sends anything on its own. Over the USB console it accepts CEC frames from the host application
+and reports the transmission result (`ack`, `nack`, `busy`, `timeout`, `collision`, `error`).
 
-Прошивка построена на базе проекта [pico-cec](https://github.com/gkoh/pico-cec)
-(Guo-Rong Koh, лицензия MIT), коммит
+The firmware is built on [pico-cec](https://github.com/gkoh/pico-cec) by Guo-Rong Koh (MIT
+license), commit
 [`8a5d469`](https://github.com/gkoh/pico-cec/commit/8a5d4690461ae4f676f69511c51063b860789ff7).
-Исходная лицензия сохранена в [LICENSE](LICENSE).
+The original license is kept in [LICENSE](LICENSE).
 
-## Контрибьюторы pico-cec
+## pico-cec contributors
 
-Список составлен по истории git оригинального репозитория на коммит `8a5d469`
-(число коммитов в скобках).
+Taken from the git history of the original repository at commit `8a5d469`.
 
-- Guo-Rong Koh ([@gkoh](https://github.com/gkoh)), автор проекта (96)
-- Ansuz Inspirati (3)
-- Flaviu Tamas (2)
-- Michał Budzyński (2)
-- Alex Martens (1)
-- Kenny Jackson (1)
-- christian-0s (1)
-- [@dennizzzz](https://github.com/dennizzzz) (1)
+- Guo-Rong Koh ([@gkoh](https://github.com/gkoh)), project author
+- Ansuz Inspirati
+- Flaviu Tamas
+- Michał Budzyński
+- Alex Martens
+- Kenny Jackson
+- christian-0s
+- [@dennizzzz](https://github.com/dennizzzz)
 
-Изменения этого проекта (хост-управляемый режим, USB-протокол `cec submit`, диагностика линии)
-внёс Alexander Litvinovich.
+The changes made in this project (host-driven mode, the `cec submit` USB protocol, line
+diagnostics) are by Alexander Litvinovich.
 
-## Что изменено относительно pico-cec
+## Changes from pico-cec
 
-- Убран автономный режим: чтение EDID, определение физического адреса, занятие логического
-  адреса, ответы на запросы ТВ и отправка Active Source. Остался один исполнитель команд
-  (`src/cec-command.c`, `src/cec-command-task.c`) с очередью из одной команды.
-- Новый машинный интерфейс USB-консоли: `cec submit <id> raw <hex>`, `cec status <id>`.
-  Отправитель кадра всегда логический адрес 4.
-- Переписан передатчик кадров (`src/cec-frame.c`): возвращает результат передачи, проверяет
-  арбитраж на каждом бите `1`, не зависает на занятой линии.
-- Диагностика: `cec line` (уровень линии CEC за 200 мс), `cec scan` (какие выводы платы читаются
-  высокими), `cec pullup on|off` (внутренняя подтяжка пина до сброса).
-- Светодиод платы погашен, журнал кадров сокращён до хекс-дампа.
-- Удалено то, что не входит в эту сборку: корпус для печати (OpenSCAD), платы RP2040, CI и
-  документация исходного проекта.
+- The standalone mode is gone: EDID reading, physical address detection, logical address
+  allocation, answering TV requests and sending Active Source. What remains is a single command
+  executor (`src/cec-command.c`, `src/cec-command-task.c`) with a one-command queue.
+- New machine interface on the USB console: `cec submit <id> raw <hex>`, `cec status <id>`.
+  Frames are always sent from logical address 4.
+- The frame transmitter (`src/cec-frame.c`) was rewritten: it returns the transmission result,
+  checks arbitration on every `1` bit, and no longer hangs on a busy line.
+- Diagnostics: `cec line` (CEC line level over 200 ms), `cec scan` (which board pins read high),
+  `cec pullup on|off` (internal pull-up on the pin until reset).
+- The board LED is kept off and the frame log is reduced to a hex dump.
+- Removed what this build does not use: the printable enclosure (OpenSCAD), RP2040 boards, CI and
+  the original project's documentation.
 
-## Состав
+## Layout
 
-| Путь | Назначение |
+| Path | Purpose |
 | --- | --- |
-| `src/`, `include/` | Исходники прошивки |
-| `crc/` | Библиотека CRC ([gityf/crc](https://github.com/gityf/crc)) |
-| `CMakeLists.txt` | Сборка |
+| `src/`, `include/` | Firmware sources |
+| `crc/` | CRC library ([gityf/crc](https://github.com/gityf/crc)) |
+| `CMakeLists.txt` | Build |
 | `pico-sdk/`, `FreeRTOS-Kernel/`, `tcli/` | Git submodules: [Pico SDK](https://github.com/raspberrypi/pico-sdk), [FreeRTOS-Kernel](https://github.com/raspberrypi/FreeRTOS-Kernel), [tcli](https://github.com/dpse/tcli) |
 
-## Сборка
+## Building
 
-Из каталога `hdmi-cec`: `python3 cec.py setup`, затем `.venv/bin/python cec.py build`.
-Параметры платы и пина задаёт [config.cmake](../config.cmake). Запись на плату описана в
-[docs/FLASHING.md](../docs/FLASHING.md).
+From the `hdmi-cec` directory: `python3 cec.py setup`, then `.venv/bin/python cec.py build`.
+Board and pin settings live in [config.cmake](../config.cmake). Flashing is described in
+[docs/FLASHING.md](../docs/FLASHING.md) (in Russian).

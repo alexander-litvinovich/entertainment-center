@@ -14,13 +14,18 @@ firmware reports `cec-host-<VERSION>-<source hash>`; the host EXE reports `<VERS
    (cd hdmi-cec/host && go test ./... && GOOS=windows go vet ./...)
    ```
 
-4. Commit, tag and push:
+4. Commit, tag and push the branch and the tag separately (GitHub can drop the tag event when
+   both go in one push, and then no workflow starts):
 
    ```sh
    git commit -am "hdmi-cec X.Y.Z"
    git tag hdmi-cec-vX.Y.Z
-   git push origin master hdmi-cec-vX.Y.Z
+   git push origin master
+   git push origin hdmi-cec-vX.Y.Z
    ```
+
+   If `gh run list` shows no run a minute later, re-push the tag:
+   `git push origin :refs/tags/hdmi-cec-vX.Y.Z && git push origin hdmi-cec-vX.Y.Z`.
 
 The [release workflow](../../.github/workflows/release-hdmi-cec.yml) checks that the tag
 matches `VERSION`, runs the tests, builds `hdmi-cec.exe` (Linux runner) and the firmware

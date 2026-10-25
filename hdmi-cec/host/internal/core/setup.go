@@ -11,3 +11,25 @@ func NextSetupInput(current int) (next int, wrapped bool) {
 	}
 	return current + 1, false
 }
+
+type SetupKey int
+
+const (
+	KeyOther SetupKey = iota
+	KeySpace
+	KeyEnter
+	KeyQuit
+)
+
+// ClassifySetupKey maps a console key-down event (virtual key, character, Ctrl held) to a setup action.
+func ClassifySetupKey(virtualKey, char uint16, ctrl bool) SetupKey {
+	switch {
+	case virtualKey == 0x1B, ctrl && (char == 0x03 || virtualKey == 'C'):
+		return KeyQuit
+	case virtualKey == 0x20:
+		return KeySpace
+	case virtualKey == 0x0D:
+		return KeyEnter
+	}
+	return KeyOther
+}

@@ -31,3 +31,22 @@ func TestProbeDoesNotSave(t *testing.T) {
 		t.Fatalf("config=%+v commands=%+v", store.cfg, d.commands)
 	}
 }
+
+func TestClassifySetupKey(t *testing.T) {
+	for _, tc := range []struct {
+		vk, ch uint16
+		ctrl   bool
+		want   SetupKey
+	}{
+		{0x1B, 0x1B, false, KeyQuit},
+		{0x43, 0x03, true, KeyQuit},
+		{0x43, 'c', false, KeyOther},
+		{0x20, ' ', false, KeySpace},
+		{0x0D, '\r', false, KeyEnter},
+		{0x41, 'a', false, KeyOther},
+	} {
+		if got := ClassifySetupKey(tc.vk, tc.ch, tc.ctrl); got != tc.want {
+			t.Errorf("ClassifySetupKey(%#x, %#x, %v) = %v, want %v", tc.vk, tc.ch, tc.ctrl, got, tc.want)
+		}
+	}
+}

@@ -6,12 +6,52 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"hdmi-cec-host/internal/core"
 	"hdmi-cec-host/internal/ipc"
 	"hdmi-cec-host/internal/winhost"
 )
+
+// inputRecord is a Win32 INPUT_RECORD holding a KEY_EVENT_RECORD.
+type inputRecord struct {
+	EventType       uint16
+	_               uint16
+	KeyDown         int32
+	RepeatCount     uint16
+	VirtualKeyCode  uint16
+	VirtualScanCode uint16
+	Char            uint16
+	ControlKeyState uint32
+}
+
+const (
+	keyEvent         = 1
+	ctrlPressedState = 0x0004 | 0x0008 // LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED
+)
+
+var readConsoleInput = windows.NewLazySystemDLL("kernel32.dll").NewProc("ReadConsoleInputW")
+
+// readKey blocks for the next recognised key press. Console key events keep a lone Esc
+// distinguishable, which byte-stream reads do not.
+func readKey(in windows.Handle) (core.SetupKey, error) {
+	for {
+		var record inputRecord
+		var read uint32
+		ok, _, err := readConsoleInput.Call(uintptr(in), uintptr(unsafe.Pointer(&record)), 1, uintptr(unsafe.Pointer(&read)))
+		if ok == 0 {
+			return core.KeyOther, err
+		}
+		if record.EventType != keyEvent || record.KeyDown == 0 {
+			continue
+		}
+		ctrl := record.ControlKeyState&ctrlPressedState != 0
+		if key := core.ClassifySetupKey(record.VirtualKeyCode, record.Char, ctrl); key != core.KeyOther {
+			return key, nil
+		}
+	}
+}
 
 func beep() {
 	_, _, _ = windows.NewLazySystemDLL("kernel32.dll").NewProc("Beep").Call(880, 200)
@@ -28,7 +68,7 @@ func runSetup() error {
 		return fmt.Errorf("service is unavailable (start it, or use `hdmi-cec run`): %w", err)
 	}
 	// Processed input is off so Ctrl+C reaches us and the console mode is restored.
-	raw := mode &^ (windows.ENABLE_LINE_INPUT | windows.ENABLE_ECHO_INPUT | windows.ENABLE_PROCESSED_INPUT)
+	raw := mode &^ (windows.ENABLE_LINE_INPUT | windows.ENABLE_ECHO_INPUT | windows.ENABLE_PROCESSED_INPUT | windows.ENABLE_VIRTUAL_TERMINAL_INPUT)
 	if err := windows.SetConsoleMode(in, raw); err != nil {
 		return err
 	}
@@ -43,13 +83,13 @@ func runSetup() error {
 	fmt.Println("Press Space to switch to the first input.")
 
 	current := -1
-	key := make([]byte, 1)
 	for {
-		if _, err := os.Stdin.Read(key); err != nil {
+		key, err := readKey(in)
+		if err != nil {
 			return err
 		}
-		switch key[0] {
-		case ' ':
+		switch key {
+		case core.KeySpace:
 			next, wrapped := core.NextSetupInput(current)
 			if wrapped {
 				beep()
@@ -65,7 +105,7 @@ func runSetup() error {
 			default:
 				fmt.Printf("%s: sent (CEC result: %s). Space = next, Enter = save, Esc = quit.\n", name, response.Status.LastResult)
 			}
-		case '\r', '\n':
+		case core.KeyEnter:
 			if current < 0 {
 				fmt.Println("No input selected yet: press Space first.")
 				continue
@@ -80,7 +120,7 @@ func runSetup() error {
 			}
 			fmt.Printf("Saved %s (%s) as the input to select after the TV turns on.\n", name, response.Status.Input)
 			return nil
-		case 0x1b, 0x03:
+		case core.KeyQuit:
 			fmt.Println("Cancelled; config unchanged.")
 			return nil
 		}

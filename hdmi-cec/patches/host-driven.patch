@@ -1,0 +1,921 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 7dc04a3..f27b30f 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -61,7 +61,6 @@ add_executable(${PROJECT}
+   src/cec-config.c
+   src/cec-frame.c
+   src/cec-log.c
+-  src/cec-task.c
+   src/cec-user.c
+   src/ddc.c
+   src/freertos_hook.c
+@@ -120,3 +119,11 @@ pico_set_linker_script(${PROJECT} ${PROJECT_SOURCE_DIR}/src/memmap_ram_nvs_${PIC
+ # disable stdio and uart
+ pico_enable_stdio_usb(${PROJECT} 0)
+ pico_enable_stdio_uart(${PROJECT} 0)
++
++option(CEC_HOST_DRIVEN "Host-driven CEC command mode" OFF)
++if(CEC_HOST_DRIVEN)
++  target_sources(${PROJECT} PRIVATE src/cec-command.c src/cec-command-task.c)
++  target_compile_definitions(${PROJECT} PRIVATE CEC_HOST_DRIVEN=1)
++else()
++  target_sources(${PROJECT} PRIVATE src/cec-task.c)
++endif()
+diff --git a/include/cec-command.h b/include/cec-command.h
+new file mode 100644
+index 0000000..52999ed
+--- /dev/null
++++ b/include/cec-command.h
+@@ -0,0 +1,47 @@
++#ifndef CEC_COMMAND_H
++#define CEC_COMMAND_H
++#include <stdbool.h>
++#include <stdint.h>
++
++typedef enum {
++  CEC_COMMAND_ON,
++  CEC_COMMAND_OFF,
++  CEC_COMMAND_INPUT,
++} cec_command_kind_t;
++
++typedef enum {
++  CEC_COMMAND_IDLE,
++  CEC_COMMAND_QUEUED,
++  CEC_COMMAND_PENDING,
++  CEC_COMMAND_DONE,
++} cec_command_state_t;
++
++typedef enum {
++  CEC_COMMAND_ACK,
++  CEC_COMMAND_NACK,
++  CEC_COMMAND_BUSY,
++  CEC_COMMAND_TIMEOUT,
++  CEC_COMMAND_COLLISION,
++  CEC_COMMAND_ERROR,
++} cec_command_result_t;
++
++typedef struct {
++  uint8_t data[4];
++  uint8_t len;
++} cec_command_frame_t;
++
++typedef struct {
++  uint32_t id;
++  cec_command_kind_t kind;
++  uint16_t physical_address;
++  cec_command_state_t state;
++  cec_command_result_t result;
++} cec_command_status_t;
++
++bool cec_command_valid_physical_address(uint16_t address);
++bool cec_command_encode(cec_command_kind_t kind, uint16_t address, cec_command_frame_t *frame);
++bool cec_command_submit(uint32_t id, cec_command_kind_t kind, uint16_t address);
++bool cec_command_snapshot(uint32_t id, cec_command_status_t *out);
++const char *cec_command_state_name(cec_command_state_t state);
++const char *cec_command_result_name(cec_command_result_t result);
++#endif
+diff --git a/include/cec-frame.h b/include/cec-frame.h
+index 8d1bbea..dbc1cc4 100644
+--- a/include/cec-frame.h
++++ b/include/cec-frame.h
+@@ -50,7 +50,8 @@ typedef enum {
+   CEC_FRAME_STATE_ACK_WAIT = 8,
+   CEC_FRAME_STATE_ACK_END = 9,
+   CEC_FRAME_STATE_END = 10,
+-  CEC_FRAME_STATE_ABORT = 11
++  CEC_FRAME_STATE_ABORT = 11,
++  CEC_FRAME_STATE_DATA_SAMPLE = 12
+ } cec_frame_state_t;
+ 
+ typedef struct cec_frame_t {
+@@ -73,6 +74,12 @@ typedef struct {
+   uint32_t tx_noack_frames;
+ } cec_frame_stats_t;
+ 
++typedef enum { CEC_TX_ACK, CEC_TX_NACK, CEC_TX_BUSY, CEC_TX_TIMEOUT,
++               CEC_TX_COLLISION, CEC_TX_ERROR } cec_tx_result_t;
++cec_tx_result_t cec_frame_send_result(const cec_message_t *message, uint32_t timeout_ms);
++void cec_frame_recv_timeout(cec_message_t *message, uint8_t address, TickType_t wait);
++bool cec_frame_receiving(void);
++bool cec_frame_line_high(void);
+ void cec_frame_init(void);
+ void cec_frame_get_stats(cec_frame_stats_t *stats);
+ bool cec_frame_send(const cec_message_t *message);
+diff --git a/src/blink.c b/src/blink.c
+index 95898d1..ebdcd71 100644
+--- a/src/blink.c
++++ b/src/blink.c
+@@ -23,6 +23,10 @@ void blink_init(void) {
+ #ifdef PICO_DEFAULT_LED_PIN
+   gpio_init(PICO_DEFAULT_LED_PIN);
+   gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
++#ifdef CEC_HOST_DRIVEN
++  // XIAO USER LED is active-low. Keep it off: wake status is available over CDC.
++  gpio_put(PICO_DEFAULT_LED_PIN, true);
++#endif
+ #endif
+ }
+ 
+@@ -58,8 +62,10 @@ void blink_task(void *param) {
+     }
+ 
+ #ifdef PICO_DEFAULT_LED_PIN
++#ifndef CEC_HOST_DRIVEN
+     // heartbeat
+     gpio_put(PICO_DEFAULT_LED_PIN, state);
++#endif
+ #endif
+ 
+     // RGB
+diff --git a/src/cec-command-task.c b/src/cec-command-task.c
+new file mode 100644
+index 0000000..b8c8554
+--- /dev/null
++++ b/src/cec-command-task.c
+@@ -0,0 +1,69 @@
++#include "pico/stdlib.h"
++#include "cec-command.h"
++#include "cec-task.h"
++
++static cec_command_status_t command_status;
++static bool command_available;
++
++bool cec_command_submit(uint32_t id, cec_command_kind_t kind, uint16_t address) {
++  cec_command_frame_t frame;
++  if (id == 0 || !cec_command_encode(kind, address, &frame)) return false;
++  bool accepted = false;
++  taskENTER_CRITICAL();
++  if (!command_available && command_status.state != CEC_COMMAND_PENDING &&
++      command_status.state != CEC_COMMAND_QUEUED) {
++    command_status = (cec_command_status_t){.id = id, .kind = kind,
++      .physical_address = address, .state = CEC_COMMAND_QUEUED,
++      .result = CEC_COMMAND_ERROR};
++    command_available = true;
++    accepted = true;
++  }
++  taskEXIT_CRITICAL();
++  return accepted;
++}
++
++bool cec_command_snapshot(uint32_t id, cec_command_status_t *out) {
++  if (!out) return false;
++  bool found;
++  taskENTER_CRITICAL();
++  found = command_status.id == id && command_status.state != CEC_COMMAND_IDLE;
++  if (found) *out = command_status;
++  taskEXIT_CRITICAL();
++  return found;
++}
++
++uint16_t cec_get_physical_address(void) { return 0xffff; }
++uint8_t cec_get_logical_address(void) { return 4; }
++bool cec_send_msg(const cec_message_t *msg) { (void)msg; return false; }
++
++void cec_task(void *param) {
++  (void)param;
++  cec_frame_init();
++  for (;;) {
++    cec_command_status_t current = {0};
++    bool execute = false;
++    taskENTER_CRITICAL();
++    if (command_available) {
++      command_available = false;
++      command_status.state = CEC_COMMAND_PENDING;
++      current = command_status;
++      execute = true;
++    }
++    taskEXIT_CRITICAL();
++
++    if (execute) {
++      cec_command_frame_t frame;
++      cec_command_result_t result = CEC_COMMAND_ERROR;
++      if (cec_command_encode(current.kind, current.physical_address, &frame)) {
++        cec_message_t message = {.len = frame.len};
++        for (uint8_t i = 0; i < frame.len; ++i) message.data[i] = frame.data[i];
++        result = (cec_command_result_t)cec_frame_send_result(&message, 10000);
++      }
++      taskENTER_CRITICAL();
++      command_status.result = result;
++      command_status.state = CEC_COMMAND_DONE;
++      taskEXIT_CRITICAL();
++    }
++    vTaskDelay(pdMS_TO_TICKS(10));
++  }
++}
+diff --git a/src/cec-command.c b/src/cec-command.c
+new file mode 100644
+index 0000000..54aa637
+--- /dev/null
++++ b/src/cec-command.c
+@@ -0,0 +1,58 @@
++#include "cec-command.h"
++
++bool cec_command_valid_physical_address(uint16_t address) {
++  bool zero_seen = false;
++  if (address == 0) return false;
++  for (int shift = 12; shift >= 0; shift -= 4) {
++    uint8_t nibble = (address >> shift) & 0x0f;
++    if (zero_seen && nibble != 0) return false;
++    if (nibble == 0) zero_seen = true;
++  }
++  return true;
++}
++
++bool cec_command_encode(cec_command_kind_t kind, uint16_t address, cec_command_frame_t *frame) {
++  if (!frame) return false;
++  *frame = (cec_command_frame_t){0};
++  switch (kind) {
++    case CEC_COMMAND_ON:
++      frame->data[0] = 0x40;
++      frame->data[1] = 0x04;
++      frame->len = 2;
++      return true;
++    case CEC_COMMAND_OFF:
++      frame->data[0] = 0x40;
++      frame->data[1] = 0x36;
++      frame->len = 2;
++      return true;
++    case CEC_COMMAND_INPUT:
++      if (!cec_command_valid_physical_address(address)) return false;
++      frame->data[0] = 0x4f;
++      frame->data[1] = 0x86;
++      frame->data[2] = address >> 8;
++      frame->data[3] = address;
++      frame->len = 4;
++      return true;
++  }
++  return false;
++}
++
++const char *cec_command_state_name(cec_command_state_t state) {
++  switch (state) {
++    case CEC_COMMAND_QUEUED: return "queued";
++    case CEC_COMMAND_PENDING: return "pending";
++    case CEC_COMMAND_DONE: return "done";
++    default: return "idle";
++  }
++}
++
++const char *cec_command_result_name(cec_command_result_t result) {
++  switch (result) {
++    case CEC_COMMAND_ACK: return "ack";
++    case CEC_COMMAND_NACK: return "nack";
++    case CEC_COMMAND_BUSY: return "busy";
++    case CEC_COMMAND_TIMEOUT: return "timeout";
++    case CEC_COMMAND_COLLISION: return "collision";
++    default: return "error";
++  }
++}
+diff --git a/src/cec-frame.c b/src/cec-frame.c
+index 025c565..4235b95 100644
+--- a/src/cec-frame.c
++++ b/src/cec-frame.c
+@@ -6,6 +6,7 @@
+ 
+ #include "cec-frame.h"
+ #include "cec-log.h"
++#include "hardware/sync.h"
+ 
+ TaskHandle_t xCECTask;
+ 
+@@ -14,12 +15,21 @@ static cec_frame_t rx_frame = {.message = &rx_message};
+ 
+ /* CEC statistics. */
+ static cec_frame_stats_t cec_stats;
++static alarm_id_t rx_ack_alarm = 0;
++static bool rx_listening = false;
++static volatile uint64_t rx_started = 0;
++static volatile uint64_t last_edge = 0;
++static volatile cec_tx_result_t tx_result;
++static cec_frame_t tx_frame;
++static cec_message_t tx_message;
++
+ 
+ /**
+  * Calculate next offset as time since boot.
+  */
+ static uint64_t time_next(uint64_t start, uint64_t next) {
+-  return (next - (time_us_64() - start));
++  uint64_t elapsed = time_us_64() - start;
++  return elapsed < next ? next - elapsed : 1;
+ }
+ 
+ /**
+@@ -32,6 +42,7 @@ static int64_t ack_high(alarm_id_t alarm, void *user_data) {
+ }
+ 
+ static void frame_rx_isr(uint gpio, uint32_t events) {
++  last_edge = time_us_64();
+   uint64_t low_time = 0;
+   gpio_acknowledge_irq(gpio, events);
+   gpio_set_irq_enabled(CEC_PIN, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, false);
+@@ -39,6 +50,7 @@ static void frame_rx_isr(uint gpio, uint32_t events) {
+   switch (rx_frame.state) {
+     case CEC_FRAME_STATE_START_LOW:
+       rx_frame.start = time_us_64();
++      rx_started = rx_frame.start;
+       rx_frame.state = CEC_FRAME_STATE_START_HIGH;
+       gpio_set_irq_enabled(CEC_PIN, GPIO_IRQ_EDGE_RISE, true);
+       return;
+@@ -94,6 +106,11 @@ static void frame_rx_isr(uint gpio, uint32_t events) {
+         rx_frame.eom = bit;
+         rx_frame.state = CEC_FRAME_STATE_ACK_LOW;
+       } else {
++        if (rx_frame.byte >= CEC_FRAME_MAX_LEN) {
++          rx_frame.state = CEC_FRAME_STATE_ABORT;
++          xTaskNotifyIndexedFromISR(xCECTask, NOTIFY_RX, NOTIFY_RX_ABORT, eSetBits, NULL);
++          return;
++        }
+         rx_frame.message->data[rx_frame.byte] <<= 1;
+         rx_frame.message->data[rx_frame.byte] |= bit ? 0x01 : 0x00;
+         rx_frame.bit++;
+@@ -112,7 +129,8 @@ static void frame_rx_isr(uint gpio, uint32_t events) {
+       if ((tgt_addr != 0x0f) && (tgt_addr == rx_frame.address)) {
+         rx_frame.state = CEC_FRAME_STATE_ACK_END;
+         gpio_set_dir(CEC_PIN, GPIO_OUT);  // pull low, then schedule pull high
+-        add_alarm_at(from_us_since_boot(rx_frame.start + 1500), ack_high, NULL, true);
++        rx_ack_alarm = add_alarm_at(from_us_since_boot(rx_frame.start + 1500), ack_high, NULL, true);
++        if (rx_ack_alarm <= 0) gpio_set_dir(CEC_PIN, GPIO_IN);
+         rx_frame.ack = true;
+       }
+       rx_frame.state = CEC_FRAME_STATE_ACK_HIGH;
+@@ -144,43 +162,67 @@ static void frame_rx_isr(uint gpio, uint32_t events) {
+   }
+ }
+ 
+-void cec_frame_recv(cec_message_t *message, uint8_t address) {
+-  // printf("cec_frame_recv\n");
+-  rx_frame.address = address;
+-  rx_frame.state = CEC_FRAME_STATE_START_LOW;
+-  rx_frame.ack = false;
+-  memset(&rx_frame.message->data[0], 0, CEC_FRAME_MAX_LEN);
+-  gpio_set_irq_enabled(CEC_PIN, GPIO_IRQ_EDGE_FALL, true);
++static void stop_rx(void) {
++  // All CEC task and alarm handlers run on core 0.
++  uint32_t irq = save_and_disable_interrupts();
++  gpio_set_irq_enabled(CEC_PIN, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, false);
++  if (rx_ack_alarm > 0) cancel_alarm(rx_ack_alarm);
++  rx_ack_alarm = 0;
++  gpio_set_dir(CEC_PIN, GPIO_IN);
++  rx_listening = false;
++  restore_interrupts(irq);
++}
+ 
+-  uint32_t notify = 0;
++bool cec_frame_receiving(void) {
++  return rx_listening && rx_frame.state != CEC_FRAME_STATE_START_LOW &&
++         rx_frame.state != CEC_FRAME_STATE_END && rx_frame.state != CEC_FRAME_STATE_ABORT;
++}
+ 
+-  /* Wait for an RX notification: RX_RX (default), RX_ABORT or RX_TX */
+-  xTaskNotifyWaitIndexed(NOTIFY_RX, 0x00, 0xffffffff, &notify, portMAX_DELAY);
++bool cec_frame_line_high(void) { return gpio_get(CEC_PIN); }
+ 
+-  if (notify == NOTIFY_RX_TX) {
+-    gpio_set_irq_enabled(CEC_PIN, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, false);
+-    return;
+-  } else if (notify == NOTIFY_RX_ABORT) {
+-    // printf("ABORT\n");
+-    cec_stats.rx_abort_frames++;
+-    message->len = 0;
+-    return;
++void cec_frame_recv_timeout(cec_message_t *message, uint8_t address, TickType_t wait) {
++  message->len = 0;
++  if (!rx_listening) {
++    uint32_t irq = save_and_disable_interrupts();
++    rx_frame.address = address;
++    rx_frame.state = CEC_FRAME_STATE_START_LOW;
++    rx_frame.ack = false;
++    rx_started = 0;
++    memset(rx_frame.message, 0, sizeof(*rx_frame.message));
++    gpio_set_irq_callback(&frame_rx_isr);
++    gpio_acknowledge_irq(CEC_PIN, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL);
++    rx_listening = true;
++    gpio_set_irq_enabled(CEC_PIN, GPIO_IRQ_EDGE_FALL, true);
++    restore_interrupts(irq);
+   }
++  uint32_t notify = 0;
++  xTaskNotifyWaitIndexed(NOTIFY_RX, 0, 0xffffffff, &notify, wait);
++  if (notify & NOTIFY_RX_RX) {
++    stop_rx();
++    *message = rx_message;
++    cec_log_frame(&rx_frame, true);
++    ++cec_stats.rx_frames;
++  } else if ((notify & (NOTIFY_RX_ABORT | NOTIFY_RX_TX)) ||
++             (rx_started && time_us_64() - rx_started > 500000)) {
++    stop_rx();
++    ++cec_stats.rx_abort_frames;
++  }
++}
+ 
+-  memcpy(message, rx_frame.message, rx_frame.message->len);
+-  // printf("high water mark = %lu\n", uxTaskGetStackHighWaterMark(xCECTask));
+-
+-  message->len = rx_frame.message->len;
+-  cec_log_frame(&rx_frame, true);
++void cec_frame_recv(cec_message_t *message, uint8_t address) {
++  cec_frame_recv_timeout(message, address, pdMS_TO_TICKS(50));
++}
+ 
+-  cec_stats.rx_frames++;
+-  return;
++static int64_t tx_stop(cec_tx_result_t result) {
++  gpio_set_dir(CEC_PIN, GPIO_IN);
++  tx_result = result;
++  vTaskNotifyGiveIndexedFromISR(xCECTask, NOTIFY_TX, NULL);
++  return 0;
+ }
+ 
+ static int64_t frame_tx_callback(alarm_id_t alarm, void *user_data) {
+-  cec_frame_t *frame = (cec_frame_t *)user_data;
+-  uint64_t low_time = 0;
+-
++  cec_frame_t *frame = user_data;
++  uint64_t low_time;
+   switch (frame->state) {
+     case CEC_FRAME_STATE_START_LOW:
+       gpio_set_dir(CEC_PIN, GPIO_OUT);
+@@ -199,19 +241,21 @@ static int64_t frame_tx_callback(alarm_id_t alarm, void *user_data) {
+       return time_next(frame->start, low_time);
+     case CEC_FRAME_STATE_DATA_HIGH:
+       gpio_set_dir(CEC_PIN, GPIO_IN);
+-      if (frame->bit--) {
+-        frame->state = CEC_FRAME_STATE_DATA_LOW;
+-      } else {
+-        frame->byte++;
+-        frame->state = CEC_FRAME_STATE_EOM_LOW;
+-      }
++      frame->state = CEC_FRAME_STATE_DATA_SAMPLE;
++      low_time = (frame->message->data[frame->byte] & (1 << frame->bit)) ? 1050 : 1800;
++      return time_next(frame->start, low_time);
++    case CEC_FRAME_STATE_DATA_SAMPLE:
++      // A transmitted 1 overridden by another initiator is a lost arbitration.
++      if ((frame->message->data[frame->byte] & (1 << frame->bit)) && !gpio_get(CEC_PIN))
++        return tx_stop(CEC_TX_COLLISION);
++      if (frame->bit--) frame->state = CEC_FRAME_STATE_DATA_LOW;
++      else { ++frame->byte; frame->state = CEC_FRAME_STATE_EOM_LOW; }
+       return time_next(frame->start, 2400);
+     case CEC_FRAME_STATE_EOM_LOW:
+       gpio_set_dir(CEC_PIN, GPIO_OUT);
+-      low_time = (frame->byte < frame->message->len) ? 1500 : 600;
+       frame->start = time_us_64();
+       frame->state = CEC_FRAME_STATE_EOM_HIGH;
+-      return time_next(frame->start, low_time);
++      return time_next(frame->start, frame->byte < frame->message->len ? 1500 : 600);
+     case CEC_FRAME_STATE_EOM_HIGH:
+       gpio_set_dir(CEC_PIN, GPIO_IN);
+       frame->state = CEC_FRAME_STATE_ACK_LOW;
+@@ -223,67 +267,83 @@ static int64_t frame_tx_callback(alarm_id_t alarm, void *user_data) {
+       return time_next(frame->start, 600);
+     case CEC_FRAME_STATE_ACK_HIGH:
+       gpio_set_dir(CEC_PIN, GPIO_IN);
+-      if (frame->byte < frame->message->len) {
+-        frame->bit = 7;
+-        frame->state = CEC_FRAME_STATE_DATA_LOW;
+-        return time_next(frame->start, 2400);
+-      } else {
+-        frame->state = CEC_FRAME_STATE_ACK_WAIT;
+-        // middle of safe sample period (0.85ms, 1.25ms)
+-        return time_next(frame->start, (850 + 1250) / 2);
+-      }
++      frame->state = CEC_FRAME_STATE_ACK_WAIT;
++      return time_next(frame->start, 1050);
+     case CEC_FRAME_STATE_ACK_WAIT:
+-      // handle follower sending ack
+-      if (gpio_get(CEC_PIN) == false) {
+-        frame->ack = true;
+-      }
+-      frame->state = CEC_FRAME_STATE_END;
++      frame->ack = (frame->message->header & 15) == 15 ? gpio_get(CEC_PIN) : !gpio_get(CEC_PIN);
++      frame->state = CEC_FRAME_STATE_ACK_END;
+       return time_next(frame->start, 2400);
+-    case CEC_FRAME_STATE_END:
+-    default:
+-      xTaskNotifyIndexedFromISR(xCECTask, NOTIFY_TX, 0, eNoAction, NULL);
+-      return 0;
++    case CEC_FRAME_STATE_ACK_END:
++      if (!frame->ack) return tx_stop(CEC_TX_NACK);
++      if (frame->byte == frame->message->len) return tx_stop(CEC_TX_ACK);
++      frame->bit = 7;
++      frame->state = CEC_FRAME_STATE_DATA_LOW;
++      return 1;
++    default: return tx_stop(CEC_TX_ERROR);
+   }
+ }
+ 
+-static bool frame_tx(const cec_message_t *message) {
+-  unsigned char i = 0;
++#ifndef CEC_HOST_DRIVEN
++static void idle_edge(uint gpio, uint32_t events) {
++  last_edge = time_us_64();
++  gpio_acknowledge_irq(gpio, events);
++}
++#endif
+ 
+-  // wait 7 bit times of idle before sending
+-  while (i < 7) {
+-    vTaskDelay(pdMS_TO_TICKS(2.4));
+-    if (gpio_get(CEC_PIN)) {
+-      i++;
+-    } else {
+-      // reset
+-      i = 0;
+-    }
++cec_tx_result_t cec_frame_send_result(const cec_message_t *message, uint32_t timeout_ms) {
++  if (!message || !message->len || message->len > CEC_FRAME_MAX_LEN) return CEC_TX_ERROR;
++  stop_rx();
++  if (!timeout_ms) return CEC_TX_TIMEOUT;
++  uint64_t deadline = time_us_64() + (uint64_t)timeout_ms * 1000;
++#ifdef CEC_HOST_DRIVEN
++  // The standalone adapter sends one boot frame. Start as soon as the line is
++  // released; bit-level arbitration below still detects a real collision.
++  while (!gpio_get(CEC_PIN)) {
++    if (time_us_64() >= deadline) return CEC_TX_BUSY;
++    vTaskDelay(1);
+   }
+-
+-  cec_frame_t frame = {.message = (cec_message_t *)message,
+-                       .bit = 7,
+-                       .byte = 0,
+-                       .start = 0,
+-                       .ack = false,
+-                       .state = CEC_FRAME_STATE_START_LOW};
+-  add_alarm_at(from_us_since_boot(time_us_64()), frame_tx_callback, &frame, true);
+-  ulTaskNotifyTakeIndexed(NOTIFY_TX, pdTRUE, portMAX_DELAY);
+-  // printf("high water mark = %lu\n", uxTaskGetStackHighWaterMark(xCECTask));
+-  cec_log_frame(&frame, false);
+-
+-  if (frame.ack) {
+-    cec_stats.tx_frames++;
+-  } else {
+-    cec_stats.tx_noack_frames++;
++#else
++  last_edge = time_us_64();
++  gpio_set_irq_callback(idle_edge);
++  gpio_acknowledge_irq(CEC_PIN, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL);
++  gpio_set_irq_enabled(CEC_PIN, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
++  for (;;) {
++    uint32_t irq = save_and_disable_interrupts();
++    bool idle = gpio_get(CEC_PIN) && time_us_64() - last_edge >= 16800;
++    bool expired = time_us_64() >= deadline;
++    if (idle || expired) {
++      gpio_set_irq_enabled(CEC_PIN, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, false);
++      restore_interrupts(irq);
++      if (expired) return CEC_TX_BUSY;
++      break;
++    }
++    restore_interrupts(irq);
++    vTaskDelay(1);
+   }
+-
+-  return frame.ack;
++#endif
++  // Static storage plus cancellation prevents an alarm retaining a stack pointer.
++  tx_message = *message;
++  tx_frame = (cec_frame_t){.message = &tx_message, .bit = 7, .state = CEC_FRAME_STATE_START_LOW};
++  tx_result = CEC_TX_TIMEOUT;
++  ulTaskNotifyTakeIndexed(NOTIFY_TX, pdTRUE, 0);
++  alarm_id_t alarm = add_alarm_in_us(1, frame_tx_callback, &tx_frame, true);
++  if (alarm <= 0) { gpio_set_dir(CEC_PIN, GPIO_IN); return CEC_TX_ERROR; }
++  uint64_t now = time_us_64();
++  TickType_t wait = now < deadline ? pdMS_TO_TICKS((deadline - now) / 1000) : 0;
++  uint32_t done = ulTaskNotifyTakeIndexed(NOTIFY_TX, pdTRUE, wait);
++  uint32_t irq = save_and_disable_interrupts();
++  cancel_alarm(alarm);
++  gpio_set_dir(CEC_PIN, GPIO_IN);
++  if (!done) tx_result = CEC_TX_TIMEOUT;
++  restore_interrupts(irq);
++  cec_log_frame(&tx_frame, false);
++  if (tx_result == CEC_TX_ACK) ++cec_stats.tx_frames;
++  else ++cec_stats.tx_noack_frames;
++  return tx_result;
+ }
+ 
+ bool cec_frame_send(const cec_message_t *message) {
+-  // disable GPIO ISR for sending
+-  gpio_set_irq_enabled(CEC_PIN, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, false);
+-  return frame_tx(message);
++  return cec_frame_send_result(message, 500) == CEC_TX_ACK;
+ }
+ 
+ void cec_frame_get_stats(cec_frame_stats_t *stats) {
+@@ -293,6 +353,7 @@ void cec_frame_get_stats(cec_frame_stats_t *stats) {
+ void cec_frame_init(void) {
+   gpio_init(CEC_PIN);
+   gpio_disable_pulls(CEC_PIN);
++  gpio_put(CEC_PIN, 0);
+   gpio_set_dir(CEC_PIN, GPIO_IN);
+ 
+   gpio_set_irq_callback(&frame_rx_isr);
+diff --git a/src/cec-log.c b/src/cec-log.c
+index 26518cf..c63cc39 100644
+--- a/src/cec-log.c
++++ b/src/cec-log.c
+@@ -78,170 +78,13 @@ void cec_log_submitf(const char *fmt, ...) {
+   va_end(ap);
+ }
+ 
+-/**
+- * Log a timestamped formatted message.
+- */
+-__attribute__((format(printf, 5, 6))) static void log_printf(uint8_t initiator,
+-                                                             uint8_t destination,
+-                                                             bool send,
+-                                                             bool ack,
+-                                                             const char *fmt,
+-                                                             ...) {
+-  char prefix[64];
+-  char buffer[64];
+-  char *arrow = "??";
+-
+-  if (send) {
+-    if (ack) {
+-      arrow = "->";
+-    } else {
+-      arrow = "~>";
+-    }
+-  } else {
+-    if (ack) {
+-      arrow = "<-";
+-    } else {
+-      arrow = "<~";
+-    }
+-  }
+-
+-  va_list ap;
+-  va_start(ap, fmt);
+-  snprintf(prefix, sizeof(prefix), "[%10llu] %02x %s %02x", util_uptime_ms(),
+-           send ? initiator : destination, arrow, send ? destination : initiator);
+-  vsnprintf(buffer, sizeof(buffer), fmt, ap);
+-  cec_log_submitf("%s: %s"_LOG_BR, prefix, buffer);
+-  va_end(ap);
+-}
+ 
+-const char *cec_message[] = {
+-    [CEC_ID_FEATURE_ABORT] = "Feature Abort",
+-    [CEC_ID_IMAGE_VIEW_ON] = "Image View On",
+-    [CEC_ID_TEXT_VIEW_ON] = "Text View On",
+-    [CEC_ID_STANDBY] = "Standby",
+-    [CEC_ID_USER_CONTROL_PRESSED] = "User Control Pressed",
+-    [CEC_ID_USER_CONTROL_RELEASED] = "User Control Released",
+-    [CEC_ID_GIVE_OSD_NAME] = "Give OSD Name",
+-    [CEC_ID_SET_OSD_NAME] = "Set OSD Name",
+-    [CEC_ID_SYSTEM_AUDIO_MODE_REQUEST] = "System Audio Mode Request",
+-    [CEC_ID_GIVE_AUDIO_STATUS] = "Give Audio Status",
+-    [CEC_ID_SET_SYSTEM_AUDIO_MODE] = "Set System Audio Mode",
+-    [CEC_ID_GIVE_SYSTEM_AUDIO_MODE_STATUS] = "Give System Audio Mode",
+-    [CEC_ID_SYSTEM_AUDIO_MODE_STATUS] = "System Audio Mode Status",
+-    [CEC_ID_REPORT_AUDIO_STATUS] = "Report Audio Status",
+-    [CEC_ID_ROUTING_CHANGE] = "Routing Change",
+-    [CEC_ID_ACTIVE_SOURCE] = "Active Source",
+-    [CEC_ID_GIVE_PHYSICAL_ADDRESS] = "Give Physical Address",
+-    [CEC_ID_REPORT_PHYSICAL_ADDRESS] = "Report Physical Address",
+-    [CEC_ID_REQUEST_ACTIVE_SOURCE] = "Request Active Source",
+-    [CEC_ID_SET_STREAM_PATH] = "Set Stream Path",
+-    [CEC_ID_DEVICE_VENDOR_ID] = "Device Vendor ID",
+-    [CEC_ID_GIVE_DEVICE_VENDOR_ID] = "Give Device Vendor ID",
+-    [CEC_ID_MENU_STATUS] = "Menu Status",
+-    [CEC_ID_MENU_REQUEST] = "Menu Request",
+-    [CEC_ID_GIVE_DEVICE_POWER_STATUS] = "Give Device Power Status",
+-    [CEC_ID_REPORT_POWER_STATUS] = "Report Power Status",
+-    [CEC_ID_GET_MENU_LANGUAGE] = "Get Menu Language",
+-    [CEC_ID_INACTIVE_SOURCE] = "Inactive Source",
+-    [CEC_ID_CEC_VERSION] = "CEC Version",
+-    [CEC_ID_GET_CEC_VERSION] = "Get CEC Version",
+-    [CEC_ID_VENDOR_COMMAND_WITH_ID] = "Vendor Command With ID",
+-    [CEC_ID_REQUEST_ARC_INITIATION] = "Request ARC Initiation",
+-    [CEC_ID_ABORT] = "Abort",
+-};
+-
+-const char *cec_feature_abort_reason[] = {
+-    [CEC_ABORT_UNRECOGNIZED] = "Unrecognized opcode",
+-    [CEC_ABORT_INCORRECT_MODE] = "Not in correct mode to respond",
+-    [CEC_ABORT_NO_SOURCE] = "Cannot provide source",
+-    [CEC_ABORT_INVALID] = "Invalid operand",
+-    [CEC_ABORT_REFUSED] = "Refused",
+-    [CEC_ABORT_UNDETERMINED] = "Undetermined",
+-};
+-
+-/**
+- * Log a CEC frame.
+- *
+- * CEC frame logging function, which includes minor protocol decoding for debug
+- * purposes.
+- */
+ void cec_log_frame(cec_frame_t *frame, bool recv) {
+-  cec_message_t *msg = frame->message;
+-  uint8_t initiator = (msg->data[0] & 0xf0) >> 4;
+-  uint8_t destination = msg->data[0] & 0x0f;
+-
+-  if (msg->len > 1) {
+-    uint8_t cmd = msg->data[1];
+-    switch (cmd) {
+-      case CEC_ID_FEATURE_ABORT:
+-        log_printf(initiator, destination, recv, frame->ack, "[%s][%x][%s]", cec_message[cmd],
+-                   msg->data[2], cec_feature_abort_reason[msg->data[3]]);
+-        break;
+-      case CEC_ID_STANDBY:
+-        log_printf(initiator, destination, recv, frame->ack, "[%s][%s]", cec_message[cmd],
+-                   "Display OFF");
+-        break;
+-      case CEC_ID_ROUTING_CHANGE:
+-        log_printf(initiator, destination, recv, frame->ack, "[%s][%02x%02x -> %02x%02x]",
+-                   cec_message[cmd], msg->data[2], msg->data[3], msg->data[4], msg->data[5]);
+-        break;
+-      case CEC_ID_ACTIVE_SOURCE:
+-        log_printf(initiator, destination, recv, frame->ack, "[%s][%02x%02x Display ON]",
+-                   cec_message[cmd], msg->data[2], msg->data[3]);
+-        break;
+-      case CEC_ID_REPORT_PHYSICAL_ADDRESS:
+-        log_printf(initiator, destination, recv, frame->ack, "[%s] %02x%02x", cec_message[cmd],
+-                   msg->data[2], msg->data[3]);
+-        break;
+-      case CEC_ID_USER_CONTROL_PRESSED: {
+-        uint8_t key = msg->data[2];
+-        const char *name = cec_user_control_name[key];
+-        if (name != NULL) {
+-          log_printf(initiator, destination, recv, frame->ack, "[%s][%s]", cec_message[cmd], name);
+-        } else {
+-          log_printf(initiator, destination, recv, frame->ack, "[%s] Unknown command: 0x%02x",
+-                     cec_message[cmd], key);
+-        }
+-      } break;
+-      case CEC_ID_VENDOR_COMMAND_WITH_ID:
+-        log_printf(initiator, destination, recv, frame->ack, "[%s]", cec_message[cmd]);
+-        for (int i = 0; i < msg->len; i++) {
+-          cec_log_submitf(" %02x"_LOG_BR, msg->data[i]);
+-        }
+-        break;
+-      case CEC_ID_REPORT_POWER_STATUS:
+-        const char *status = "unknown";
+-        switch (msg->data[2]) {
+-          case 0x00:
+-            status = "On";
+-            break;
+-          case 0x01:
+-            status = "Standby";
+-            break;
+-          case 0x02:
+-            status = "In transition Standby to On";
+-            break;
+-          case 0x03:
+-            status = "In transition On to Standby";
+-            break;
+-        }
+-        log_printf(initiator, destination, recv, frame->ack, "[%s][%s]", cec_message[cmd], status);
+-        break;
+-      case CEC_ID_MENU_STATUS:
+-      case CEC_ID_MENU_REQUEST:
+-        log_printf(initiator, destination, recv, frame->ack, "[%s][%02x]", cec_message[cmd],
+-                   msg->data[2]);
+-        break;
+-      default: {
+-        const char *message = cec_message[cmd];
+-        if (strlen(message) > 0) {
+-          log_printf(initiator, destination, recv, frame->ack, "[%s]", cec_message[cmd]);
+-        } else {
+-          log_printf(initiator, destination, recv, frame->ack, "[%x] (undecoded)", cmd);
+-        }
+-      }
+-    }
+-  } else {
+-    log_printf(initiator, destination, recv, frame->ack, "[%s]", "Polling Message");
+-  }
++  if (!enabled) return;
++  char data[CEC_FRAME_MAX_LEN * 3 + 1] = {0};
++  unsigned len = frame->message->len;
++  if (len > CEC_FRAME_MAX_LEN) len = CEC_FRAME_MAX_LEN;
++  for (unsigned i = 0; i < len; ++i)
++    snprintf(data + i * 3, sizeof(data) - i * 3, "%02x ", frame->message->data[i]);
++  cec_log_submitf("%s ack=%u %s"_LOG_BR, recv ? "RX" : "TX", frame->ack, data);
+ }
+diff --git a/src/usb-cdc.c b/src/usb-cdc.c
+index d2bbc80..b950481 100644
+--- a/src/usb-cdc.c
++++ b/src/usb-cdc.c
+@@ -12,6 +12,9 @@
+ #include "cec-frame.h"
+ #include "cec-log.h"
+ #include "cec-task.h"
++#ifdef CEC_HOST_DRIVEN
++#include "cec-command.h"
++#endif
+ #include "ddc.h"
+ #include "nvs.h"
+ #include "tclie.h"
+@@ -99,6 +102,69 @@ static int exec_reboot(void *arg, int argc, const char **argv) {
+   return -1;
+ }
+ 
++#ifdef CEC_HOST_DRIVEN
++static bool parse_request_id(const char *text, uint32_t *id) {
++  char *end = NULL;
++  unsigned long value = strtoul(text, &end, 10);
++  if (!text[0] || !end || *end || value == 0 || value > UINT32_MAX) return false;
++  *id = (uint32_t)value;
++  return true;
++}
++
++static int exec_cec(void *arg, int argc, const char **argv) {
++  (void)arg;
++  uint32_t id;
++  if (argc == 3 && strcmp(argv[1], "status") == 0 && parse_request_id(argv[2], &id)) {
++    cec_command_status_t status;
++    if (!cec_command_snapshot(id, &status)) {
++      cdc_printfln("@cec id=%lu state=rejected result=error", (unsigned long)id);
++      return 0;
++    }
++    if (status.state == CEC_COMMAND_DONE) {
++      cdc_printfln("@cec id=%lu state=done result=%s", (unsigned long)id,
++                   cec_command_result_name(status.result));
++    } else {
++      cdc_printfln("@cec id=%lu state=%s", (unsigned long)id,
++                   cec_command_state_name(status.state));
++    }
++    return 0;
++  }
++
++  if (argc >= 4 && strcmp(argv[1], "submit") == 0 && parse_request_id(argv[2], &id)) {
++    cec_command_kind_t kind = CEC_COMMAND_ON;
++    uint16_t address = 0;
++    bool valid = false;
++    if (argc == 4 && strcmp(argv[3], "on") == 0) {
++      kind = CEC_COMMAND_ON;
++      valid = true;
++    } else if (argc == 4 && strcmp(argv[3], "off") == 0) {
++      kind = CEC_COMMAND_OFF;
++      valid = true;
++    } else if (argc == 5 && strcmp(argv[3], "input") == 0 && strlen(argv[4]) == 4) {
++      unsigned value;
++      char tail;
++      if (sscanf(argv[4], "%4x%c", &value, &tail) == 1 && value <= UINT16_MAX &&
++          cec_command_valid_physical_address((uint16_t)value)) {
++        kind = CEC_COMMAND_INPUT;
++        address = (uint16_t)value;
++        valid = true;
++      }
++    }
++    if (!valid) {
++      cdc_printfln("@cec id=%lu state=rejected result=error", (unsigned long)id);
++      return 0;
++    }
++    if (!cec_command_submit(id, kind, address)) {
++      cdc_printfln("@cec id=%lu state=rejected result=busy", (unsigned long)id);
++      return 0;
++    }
++    cdc_printfln("@cec id=%lu state=queued", (unsigned long)id);
++    return 0;
++  }
++  return -1;
++}
++#endif
++
+ static void print_edid_delay(uint32_t delay) {
+   cdc_printfln("%-17s: %lu ms", "EDID delay", delay);
+ }
+@@ -256,6 +322,10 @@ static int exec_show(void *arg, int argc, const char **argv) {
+ }
+ 
+ static int exec_query(void *arg, int argc, const char **argv) {
++#ifdef CEC_HOST_DRIVEN
++  cdc_printfln("DDC/EDID disabled in host-driven firmware.");
++  return -1;
++#endif
+   if (argc == 2) {
+     if (strcmp(argv[1], "edid") == 0) {
+       print_physical_address(ddc_get_physical_address());
+@@ -401,7 +471,7 @@ static int exec_send(void *arg, int argc, const char **argv) {
+       if (cec_send_msg(&msg)) {
+         return 0;
+       }
+-      cdc_printfln("Send failed (queue full)");
++      cdc_printfln("Send unavailable or queue full");
+       return -1;
+     }
+     cdc_printfln("Error parsing opcode");
+@@ -410,6 +480,10 @@ static int exec_send(void *arg, int argc, const char **argv) {
+ }
+ 
+ static const tclie_cmd_t cmds[] = {
++#ifdef CEC_HOST_DRIVEN
++    {"cec", exec_cec, "Submit or inspect a host CEC command.",
++     "cec ..."},
++#endif
+     {"debug", exec_debug, "Control debug output.", "debug {on|off}"},
+     {"query", exec_query, "Query information.", "query {edid}"},
+     {"save", exec_save, "Save configuration.", "save"},
+diff --git a/src/usb_hid.c b/src/usb_hid.c
+index 36bc03f..724cabe 100644
+--- a/src/usb_hid.c
++++ b/src/usb_hid.c
+@@ -76,7 +76,8 @@ void tud_suspend_cb(bool remote_wakeup_en) {
+ }
+ 
+ // Invoked when usb bus is resumed
+-void tud_resume_cb(void) {}
++void tud_resume_cb(void) {
++}
+ 
+ //--------------------------------------------------------------------+
+ // USB HID

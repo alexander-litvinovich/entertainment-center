@@ -1,0 +1,10 @@
+build/
+.tools/
+.venv/
+__pycache__/
+.DS_Store
+*.uf2
+*.elf
+*.bin
+*.map
+firmware/

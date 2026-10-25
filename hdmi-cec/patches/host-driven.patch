@@ -791,7 +791,7 @@ index 26518cf..c63cc39 100644
 +  cec_log_submitf("%s ack=%u %s"_LOG_BR, recv ? "RX" : "TX", frame->ack, data);
  }
 diff --git a/src/usb-cdc.c b/src/usb-cdc.c
-index d2bbc80..ac7267b 100644
+index d2bbc80..642f637 100644
 --- a/src/usb-cdc.c
 +++ b/src/usb-cdc.c
 @@ -12,6 +12,11 @@
@@ -806,7 +806,7 @@ index d2bbc80..ac7267b 100644
  #include "ddc.h"
  #include "nvs.h"
  #include "tclie.h"
-@@ -99,6 +104,90 @@ static int exec_reboot(void *arg, int argc, const char **argv) {
+@@ -99,6 +104,107 @@ static int exec_reboot(void *arg, int argc, const char **argv) {
    return -1;
  }
  
@@ -834,6 +834,23 @@ index d2bbc80..ac7267b 100644
 +      busy_wait_us(100);
 +    }
 +    cdc_printfln("@cec line high=%u/2000 edges=%u", high, edges);
++    return 0;
++  }
++  if (argc == 2 && strcmp(argv[1], "scan") == 0) {
++    // Diagnostic: which XIAO RP2350 header pin reads high with pulls disabled.
++    static const uint8_t pins[] = {26, 27, 28, 5, 6, 7, 0, 1, 2, 4, 3};
++    for (unsigned i = 0; i < sizeof(pins); ++i) {
++      gpio_init(pins[i]);
++      gpio_disable_pulls(pins[i]);
++      gpio_set_dir(pins[i], GPIO_IN);
++      busy_wait_us(1000);
++      unsigned high = 0;
++      for (int n = 0; n < 200; ++n) {
++        high += gpio_get(pins[i]);
++        busy_wait_us(50);
++      }
++      cdc_printfln("@cec scan gpio%u high=%u/200", pins[i], high);
++    }
 +    return 0;
 +  }
 +  if (argc == 3 && strcmp(argv[1], "pullup") == 0) {
@@ -897,7 +914,7 @@ index d2bbc80..ac7267b 100644
  static void print_edid_delay(uint32_t delay) {
    cdc_printfln("%-17s: %lu ms", "EDID delay", delay);
  }
-@@ -256,6 +345,10 @@ static int exec_show(void *arg, int argc, const char **argv) {
+@@ -256,6 +362,10 @@ static int exec_show(void *arg, int argc, const char **argv) {
  }
  
  static int exec_query(void *arg, int argc, const char **argv) {
@@ -908,7 +925,7 @@ index d2bbc80..ac7267b 100644
    if (argc == 2) {
      if (strcmp(argv[1], "edid") == 0) {
        print_physical_address(ddc_get_physical_address());
-@@ -401,7 +494,7 @@ static int exec_send(void *arg, int argc, const char **argv) {
+@@ -401,7 +511,7 @@ static int exec_send(void *arg, int argc, const char **argv) {
        if (cec_send_msg(&msg)) {
          return 0;
        }
@@ -917,7 +934,7 @@ index d2bbc80..ac7267b 100644
        return -1;
      }
      cdc_printfln("Error parsing opcode");
-@@ -410,6 +503,10 @@ static int exec_send(void *arg, int argc, const char **argv) {
+@@ -410,6 +520,10 @@ static int exec_send(void *arg, int argc, const char **argv) {
  }
  
  static const tclie_cmd_t cmds[] = {

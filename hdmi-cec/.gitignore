@@ -7,4 +7,3 @@ __pycache__/
 *.elf
 *.bin
 *.map
-firmware/

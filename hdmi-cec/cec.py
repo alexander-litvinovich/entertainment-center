@@ -4,7 +4,6 @@ from pathlib import Path
 import argparse
 import datetime
 import hashlib
-import io
 import json
 import os
 import platform
@@ -25,7 +24,6 @@ TOOLCHAIN_NAME = "arm-gnu-toolchain-14.3.rel1-darwin-arm64-arm-none-eabi"
 TOOLCHAIN = TOOLS / TOOLCHAIN_NAME
 ARM_URL = "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/" + TOOLCHAIN_NAME + ".tar.xz"
 ARM_SHA = "30f4d08b219190a37cded6aa796f4549504902c53cfc3c7e044a8490b6eba1f7"
-UPSTREAM = "8a5d4690461ae4f676f69511c51063b860789ff7"
 VERSION = "cec-host-0.7.0"
 
 def run(*cmd, capture=False, cwd=ROOT, timeout=600):
@@ -42,13 +40,12 @@ def tool_env():
     return TOOLCHAIN / "bin" / "arm-none-eabi-gcc"
 
 def check_sources():
-    head = run("git", "-C", FW, "rev-parse", "HEAD", capture=True)
-    if head != UPSTREAM:
-        raise RuntimeError("Unexpected firmware base commit; expected " + UPSTREAM)
-    modules = run("git", "-C", FW, "submodule", "status", "--recursive", capture=True)
+    modules = run("git", "-C", ROOT, "submodule", "status", cwd=ROOT, capture=True)
     if any(line.startswith(("-", "+", "U")) for line in modules.splitlines()):
         raise RuntimeError("Missing or mismatched submodule. Run setup.")
-    return modules
+    if not (FW / "pico-sdk/lib/tinyusb/src/tusb.h").exists():
+        raise RuntimeError("TinyUSB is missing. Run setup.")
+    return run("git", "-C", ROOT, "submodule", "status", "--recursive", capture=True)
 
 def setup(_):
     if platform.system() != "Darwin" or platform.machine() != "arm64":
@@ -75,20 +72,10 @@ def setup(_):
     if not (venv / "bin/python").exists():
         run(sys.executable, "-m", "venv", venv)
     run(venv / "bin/python", "-m", "pip", "install", "-r", ROOT / "requirements.txt")
-    if not FW.exists():
-        run("git", "clone", "--no-checkout", "https://github.com/gkoh/pico-cec.git", FW)
-        run("git", "-C", FW, "checkout", "--detach", UPSTREAM)
-    if run("git", "-C", FW, "rev-parse", "HEAD", capture=True) != UPSTREAM:
-        raise RuntimeError("Existing firmware checkout has another base; refusing to reset it.")
-    run("git", "-C", FW, "submodule", "update", "--init", "--recursive", timeout=1800)
-    # Project patch is retained outside the checkout for reproducible recreation.
-    patch = ROOT / "patches" / "host-driven.patch"
-    if patch.exists():
-        applied = subprocess.run(["git", "-C", str(FW), "apply", "--reverse", "--check", str(patch)],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-        if not applied:
-            run("git", "-C", FW, "apply", "--check", patch)
-            run("git", "-C", FW, "apply", patch)
+    # Only what the RP2350 build needs: the SDK's TinyUSB, not its Wi-Fi/TLS stacks.
+    run("git", "-C", ROOT, "submodule", "update", "--init", "firmware/pico-sdk",
+        "firmware/FreeRTOS-Kernel", "firmware/tcli", timeout=1800)
+    run("git", "-C", FW / "pico-sdk", "submodule", "update", "--init", "lib/tinyusb", timeout=1800)
     run(venv / "bin/python", ROOT / "cec.py", "doctor")
 
 def doctor(_):
@@ -102,11 +89,10 @@ def doctor(_):
     import serial
     import usb.core
     print("Python, pyserial and pyusb OK; newlib:", libc)
-    print("Firmware base:", UPSTREAM)
 
-def source_hash(source=FW, include_config=True):
+def source_hash(source=FW):
     digest = hashlib.sha256()
-    files = [ROOT / "config.cmake"] if include_config else []
+    files = [ROOT / "config.cmake"]
     for base in ("src", "include", "crc"):
         files.extend(p for p in (source / base).rglob("*") if p.is_file())
     files.append(source / "CMakeLists.txt")
@@ -117,43 +103,24 @@ def source_hash(source=FW, include_config=True):
 
 def build(args):
     doctor(None)
-    source, dest = FW, BUILD
-    if args.upstream:
-        source = ROOT / "build/upstream-source"
-        dest = ROOT / "build/upstream-rp2350-clean"
-        source.mkdir(parents=True, exist_ok=True)
-        archive = subprocess.check_output(["git", "-C", str(FW), "archive", UPSTREAM])
-        for name in ("pico-sdk", "FreeRTOS-Kernel", "tcli"):
-            link = source / name
-            if link.is_symlink():
-                link.unlink()
-        with tarfile.open(fileobj=io.BytesIO(archive)) as t:
-            t.extractall(source, filter="data")
-        for name in ("pico-sdk", "FreeRTOS-Kernel", "tcli"):
-            p = source / name
-            if p.is_dir() and not p.is_symlink():
-                p.rmdir()  # archive emits an empty gitlink directory
-            if not p.exists():
-                p.symlink_to(FW / name, target_is_directory=True)
-    version = "upstream-" + UPSTREAM[:8] if args.upstream else VERSION + "-" + source_hash()[:8]
-    options = [] if args.upstream else ["-C", ROOT / "config.cmake"]
-    run("cmake", "-S", source, "-B", dest, "-G", "Ninja", *options,
+    version = VERSION + "-" + source_hash()[:8]
+    run("cmake", "-S", FW, "-B", BUILD, "-G", "Ninja", "-C", ROOT / "config.cmake",
         "-DPICO_BOARD=seeed_xiao_rp2350", "-DPICO_TOOLCHAIN_PATH=" + str(TOOLCHAIN),
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.5", "-DPICO_CEC_VERSION=" + version)
-    run("cmake", "--build", dest, "--parallel", "8")
-    info = run("picotool", "info", "-a", dest / "pico-cec.uf2", capture=True)
-    manifest = {"version": version, "upstream": UPSTREAM, "board": "seeed_xiao_rp2350",
+    run("cmake", "--build", BUILD, "--parallel", "8")
+    info = run("picotool", "info", "-a", BUILD / "pico-cec.uf2", capture=True)
+    manifest = {"version": version, "board": "seeed_xiao_rp2350",
                 "built_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                "source_sha256": source_hash(source, not args.upstream),
-                "config": None if args.upstream else (ROOT / "config.cmake").read_text(),
+                "source_sha256": source_hash(),
+                "config": (ROOT / "config.cmake").read_text(),
                 "submodules": check_sources(), "picotool_info": info,
                 "tools": {cmd: run(cmd, flag, capture=True).splitlines()[0] for cmd, flag in
                           [("cmake", "--version"), ("ninja", "--version"), ("picotool", "version"),
                            (str(tool_env()), "--version")]},
-                "sha256": {f: sha(dest / f) for f in ("pico-cec.uf2", "pico-cec.elf")}}
-    (dest / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+                "sha256": {f: sha(BUILD / f) for f in ("pico-cec.uf2", "pico-cec.elf")}}
+    (BUILD / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(info)
-    print("Output:", dest / "pico-cec.uf2")
+    print("Output:", BUILD / "pico-cec.uf2")
 
 def validate_uf2(path):
     data = Path(path).read_bytes()
@@ -274,8 +241,6 @@ def main():
     for name in ("setup", "doctor", "build", "flash", "monitor"):
         p = sub.add_parser(name)
         p.set_defaults(handler=globals()[name])
-        if name == "build":
-            p.add_argument("--upstream", action="store_true", help="Build pristine pinned upstream separately")
         if name in ("flash", "monitor"):
             p.add_argument("--port")
         if name == "flash":

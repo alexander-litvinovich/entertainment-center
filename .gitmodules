@@ -1,0 +1,9 @@
+[submodule "hdmi-cec/firmware/FreeRTOS-Kernel"]
+	path = hdmi-cec/firmware/FreeRTOS-Kernel
+	url = https://github.com/raspberrypi/FreeRTOS-Kernel.git
+[submodule "hdmi-cec/firmware/pico-sdk"]
+	path = hdmi-cec/firmware/pico-sdk
+	url = https://github.com/raspberrypi/pico-sdk.git
+[submodule "hdmi-cec/firmware/tcli"]
+	path = hdmi-cec/firmware/tcli
+	url = https://github.com/dpse/tcli

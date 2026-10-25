@@ -1,50 +1,52 @@
-# Установка Windows Service
+# Windows service
 
-## Требования
+## Requirements
 
 - Windows 10/11 x64.
-- Прошивка адаптера `cec-host-0.7.0` или новее.
-- USB CDC с VID:PID `CAFE:4005`.
-- Права администратора только для установки и удаления службы.
+- Adapter firmware `cec-host-0.7.0` or newer.
+- USB CDC device with VID:PID `CAFE:4005`.
+- Administrator rights only to install and uninstall the service.
 
-## Установка
+## Installation
 
-1. Скопируйте `build/windows-amd64/hdmi-cec.exe` в постоянный каталог, например
-   `C:\Program Files\HdmiCecHost\`. Не перемещайте EXE после установки.
-2. Откройте PowerShell от имени администратора в этом каталоге.
-3. Выполните `.\hdmi-cec.exe install`.
+1. Download `hdmi-cec.exe` from the
+   [latest hdmi-cec release](https://github.com/alexander-litvinovich/entertainment-center/releases)
+   and copy it to a permanent folder, e.g. `C:\Program Files\HdmiCecHost\`. Do not move the
+   EXE after installation: the service and the updater use this path.
+2. Open PowerShell as administrator in that folder.
+3. Run `.\hdmi-cec.exe install`.
 
-Команда удаляет старую задачу `HDMI CEC Wake`, создаёт автоматическую службу
-`HdmiCecHost` под `LocalSystem`, регистрирует источник Event Log и запускает службу.
-Этот первый запуск имеет причину `Demand`, поэтому сам по себе ТВ не включает.
+The command removes the old `HDMI CEC Wake` scheduled task, creates the automatic
+`HdmiCecHost` service running as `LocalSystem` with restart-on-failure, registers the Event
+Log source and starts the service. This first start has reason `Demand`, so it does not turn
+the TV on.
 
-## Запуск без установки (отладка)
+## Running without installing (debugging)
 
 ```powershell
-.\hdmi-cec.exe run            # хост в этом окне, логи в консоль, Ctrl+C — выход
-.\hdmi-cec.exe run --auto     # то же + сразу последовательность on → задержка → input
+.\hdmi-cec.exe run            # host in this window, logs to the console, Ctrl+C exits
+.\hdmi-cec.exe run --auto     # same, plus the on -> delay -> input sequence at start
 .\hdmi-cec.exe run --config C:\temp\test.json
 ```
 
-Права администратора не нужны. Хост использует тот же pipe, поэтому в другом окне
-работают `.\hdmi-cec.exe on|off|input HDMI2|status`. Конфиг по умолчанию —
-`%AppData%\HdmiCecHost\config.json`, отдельный от службы. Pipe доступен только
-текущему пользователю. Если служба установлена и запущена, pipe занят: сначала
-`Stop-Service HdmiCecHost`.
+No administrator rights are needed. The host uses the same pipe, so
+`.\hdmi-cec.exe on|off|input HDMI2|status` work from another window. The default config is
+`%AppData%\HdmiCecHost\config.json`, separate from the service. The pipe is available to the
+current user only. If the service is installed and running, it holds the pipe: run
+`Stop-Service HdmiCecHost` first.
 
-## Выбор входа и управление
+## Choosing the input and control
 
-Интерактивный подбор входа (нужна работающая служба или `run`, ТВ должен быть включён):
+Interactive input selection (needs the running service or `run`, and the TV must be on):
 
 ```powershell
 .\hdmi-cec.exe setup
 ```
 
-Пробел переключает ТВ на следующий вход HDMI1…HDMI4; после HDMI4 раздаётся
-сигнал и перебор начинается с HDMI1. Enter сохраняет текущий вход в конфиг,
-Esc или Ctrl+C выходят без записи.
+Space switches the TV to the next input, HDMI1…HDMI4; after HDMI4 it beeps and starts again
+at HDMI1. Enter saves the current input to the config; Esc or Ctrl+C exits without saving.
 
-Ручной выбор:
+Manual selection:
 
 ```powershell
 .\hdmi-cec.exe input HDMI2
@@ -54,30 +56,53 @@ Esc или Ctrl+C выходят без записи.
 .\hdmi-cec.exe status
 ```
 
-`HDMI1`…`HDMI4` соответствуют `1.0.0.0`…`4.0.0.0`. В raw-адресе четыре hex-ниббла;
-после первого нуля разрешены только нули. `input` атомарно сохраняет выбор через службу,
-затем переключает ТВ. `on` включает ТВ и через 5 секунд применяет сохранённый вход.
-`off` отменяет отложенное переключение и отправляет Standby.
-Переключение входа и `off` сначала объявляют адаптер (Report Physical Address для сохранённого
-входа), затем шлют Active Source либо Standby.
+`HDMI1`…`HDMI4` map to `1.0.0.0`…`4.0.0.0`. A raw address has four hex nibbles; after the
+first zero only zeros are allowed. `input` saves the choice atomically through the service,
+then switches the TV. `on` turns the TV on and applies the saved input 5 seconds later.
+`off` cancels a pending input switch and sends Standby. Input switching and `off` first
+announce the adapter (Report Physical Address for the saved input), then send Active Source or
+Standby.
 
-Для экспериментов можно отправить любой кадр: `.\hdmi-cec.exe send 4F:82:20:00`
-(отправитель всегда логический адрес 4, первый байт `4X`). Результат смотрите в `status`.
+Any frame can be sent for experiments: `.\hdmi-cec.exe send 4F:82:20:00` (the sender is always
+logical address 4, the first byte is `4X`). Check the result with `status`.
 
-CLI общается только с локальной службой через `\\.\pipe\hdmi-cec-host`. Удалённые
-клиенты отклоняются, локальным авторизованным пользователям доступны команды.
+The CLI talks only to the local service through `\\.\pipe\hdmi-cec-host`. Remote clients are
+rejected; authorised local users can run commands.
 
-## Автоматические события
+## Automatic events
 
-- `Auto` и `DelayedAuto` при загрузке Windows: `on`, затем input через 5 секунд.
-- `PBT_APMRESUMEAUTOMATIC (0x12)`: та же последовательность.
-- `PBT_APMRESUMESUSPEND`, ручной start и restart-on-failure: без CEC-команд.
-- Повторные boot/resume события за 30 секунд объединяются.
+- `Auto` and `DelayedAuto` at Windows boot: `on`, then the input after 5 seconds.
+- `PBT_APMRESUMEAUTOMATIC (0x12)`: the same sequence.
+- `PBT_APMRESUMESUSPEND`, a manual start and restart-on-failure: no CEC commands.
+- Repeated boot/resume events within 30 seconds are coalesced.
 
-Служба ждёт адаптер до 60 секунд. Прошивка младше `0.7.0` отклоняется. CEC ACK
-подтверждает доставку кадра, но не фактическое состояние экрана.
+The service waits up to 60 seconds for the adapter. Firmware older than `0.7.0` is rejected.
+A CEC ACK confirms delivery of the frame, not the actual screen state.
 
-## Диагностика
+## Updates
+
+The service checks
+[GitHub Releases](https://github.com/alexander-litvinovich/entertainment-center/releases)
+2 minutes after it starts and then every 24 hours. It takes the highest published
+`hdmi-cec-vX.Y.Z` release, downloads `hdmi-cec.exe`, checks it against the release's
+`SHA256SUMS`, swaps the EXE in place (the previous one is kept as `hdmi-cec.exe.old` until the
+next start) and stops with a failure code, so the SCM restart-on-failure action starts the new
+version. That restart sends no CEC commands; a running on → input sequence finishes first.
+
+```powershell
+.\hdmi-cec.exe version   # version of this EXE
+.\hdmi-cec.exe update    # check and install now, through the service
+```
+
+To turn automatic checks off, add `"autoUpdate": false` to
+`%ProgramData%\HdmiCecHost\config.json` and restart the service; `update` still works.
+Builds without a release version (`version` prints `dev`) never update. Results are written to
+the Event Log.
+
+Firmware is not updated automatically; flash it from a Mac
+([FLASHING.md](FLASHING.md)).
+
+## Diagnostics
 
 ```powershell
 .\hdmi-cec.exe status
@@ -85,7 +110,7 @@ Get-WinEvent -LogName Application | Where-Object ProviderName -eq HdmiCecHost | 
 Get-Service HdmiCecHost
 ```
 
-Если адаптер не найден, проверьте «Диспетчер устройств», USB-кабель с данными и отсутствие
-другой программы, открывшей COM-порт.
+If the adapter is not found, check Device Manager, the USB data cable, and that no other
+program has opened the COM port.
 
-Удаление из повышенного PowerShell: `.\hdmi-cec.exe uninstall`.
+Uninstall from an elevated PowerShell: `.\hdmi-cec.exe uninstall`.

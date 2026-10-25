@@ -13,7 +13,11 @@ const DefaultInputDelayMS = 5000
 type Config struct {
 	Input        string `json:"input,omitempty"`
 	InputDelayMS int    `json:"inputDelayMs"`
+	AutoUpdate   *bool  `json:"autoUpdate,omitempty"`
 }
+
+// AutoUpdateEnabled defaults to true when the setting is absent.
+func (c Config) AutoUpdateEnabled() bool { return c.AutoUpdate == nil || *c.AutoUpdate }
 
 type ConfigStore interface {
 	Load() (Config, error)

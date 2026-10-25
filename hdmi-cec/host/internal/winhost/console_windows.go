@@ -30,7 +30,7 @@ func RunConsole(ctx context.Context, configPath string, auto bool) error {
 		return err
 	}
 	// Only the current user: a non-elevated process cannot create the service's pipe ACL.
-	server, err := StartPipeServer(ctx, controller, "D:P(A;;GA;;;"+user.User.Sid.String()+")")
+	server, err := StartPipeServer(ctx, controller, "D:P(A;;GA;;;"+user.User.Sid.String()+")", nil)
 	if err != nil {
 		return fmt.Errorf("start named pipe (is the %s service running? stop it first): %w", ServiceName, err)
 	}

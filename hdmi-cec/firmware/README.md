@@ -51,6 +51,7 @@ diagnostics) are by Alexander Litvinovich.
 
 ## Building
 
-From the `hdmi-cec` directory: `python3 cec.py setup`, then `.venv/bin/python cec.py build`.
-Board and pin settings live in [config.cmake](../config.cmake). Flashing is described in
-[docs/FLASHING.md](../docs/FLASHING.md) (in Russian).
+From the repository root: `python3 .agents/skills/_shared/cec.py setup`, then
+`python3 .agents/skills/_shared/cec.py build`. Board and pin settings live in
+[config.cmake](../config.cmake); the version lives in [VERSION](../VERSION). Flashing is
+described in [docs/FLASHING.md](../docs/FLASHING.md).

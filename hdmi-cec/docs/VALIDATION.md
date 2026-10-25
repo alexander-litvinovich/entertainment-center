@@ -1,28 +1,30 @@
-# Проверка host-driven версии 0.7.0
+# Validation of the host-driven version 0.7.0
 
-## Выполнено автоматически
+## Automated
 
-- Кадры: `on = 40:04`, `off = 40:36`, Report Physical Address `4F:84:hh:ll:04`, Active Source `4F:82:hh:ll`.
-- Валидация HDMI1–HDMI4 и вложенных физических адресов.
-- ACK/NACK/busy/timeout/collision и освобождение CEC-линии в модели драйвера.
-- Автоматическая последовательность, объединение событий и отмена input командой `off`.
-- Атомарное сохранение input; распознавание версии и машинных ответов с request ID.
-- Native Go-тесты и cross-build `windows/amd64`.
-- Сборка UF2 для `seeed_xiao_rp2350`.
+- Frames: `on = 40:04`, `off = 40:36`, Report Physical Address `4F:84:hh:ll:04`, Active Source `4F:82:hh:ll`.
+- Validation of HDMI1–HDMI4 and nested physical addresses.
+- ACK/NACK/busy/timeout/collision and CEC line release in the driver model.
+- The automatic sequence, event coalescing and cancelling a pending input with `off`.
+- Atomic input saving; version detection and machine responses with request IDs.
+- Self-update: release selection, SHA-256 check, binary swap.
+- Native Go tests and the `windows/amd64` cross-build.
+- UF2 build for `seeed_xiao_rp2350`.
 
-## На устройстве и Windows
+## On the device and Windows
 
-| Проверка | Результат |
+| Check | Result |
 | --- | --- |
-| Запись и чтение `cec-host-0.7.0` | Пройдено: `show version`, `cec submit`/`status` разбирают команды, неверные аргументы дают `rejected` |
-| Подача питания не включает ТВ | Ожидает проверки |
-| `cec submit … on/off` доходит до ТВ | На Mac при проверке `collision`; причина не выяснена (проверить HDMI pin 13/17 и подтяжку CEC) |
-| `hdmi-cec on` включает ТВ | Ожидает Windows |
-| Сохранённый input применяется через 5 с | Ожидает Windows |
-| Restart службы ничего не отправляет | Ожидает Windows |
-| Resume выполняет одну последовательность | Ожидает Windows |
-| `hdmi-cec off` выключает ТВ | Ожидает Windows |
-| CLI доступна обычному локальному пользователю | Ожидает Windows |
+| Flash and read back `cec-host-0.7.0` | Passed: `show version`; `cec submit`/`status` parse commands, bad arguments give `rejected` |
+| Power-up does not turn the TV on | Pending |
+| `cec submit … on/off` reaches the TV | `collision` when tested from the Mac; cause unknown (check HDMI pins 13/17 and the CEC pull-up) |
+| `hdmi-cec on` turns the TV on | Pending Windows |
+| The saved input is applied after 5 s | Pending Windows |
+| Restarting the service sends nothing | Pending Windows |
+| Resume runs one sequence | Pending Windows |
+| `hdmi-cec off` turns the TV off | Pending Windows |
+| The CLI works for a regular local user | Pending Windows |
+| Self-update installs a newer release and the service restarts without CEC traffic | Pending Windows |
 
-Ранее пользователь подтвердил, что этот адаптер и ТВ реагируют на одиночный `Image View On`
-при подаче питания старой прошивки. Модель ТВ и HDMI-порт пока не указаны.
+The user confirmed earlier that this adapter and TV react to a single `Image View On` at
+power-up with the old firmware. The TV model and HDMI port are not recorded yet.

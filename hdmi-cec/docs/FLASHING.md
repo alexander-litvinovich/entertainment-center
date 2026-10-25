@@ -1,99 +1,93 @@
-# Запись прошивки 0.7.0 на XIAO RP2350
+# Flashing the XIAO RP2350
 
-## 1. Собрать образ
+Run every command from the repository root. `cec.py` below means
+`python3 .agents/skills/_shared/cec.py`.
 
-На время записи отключите HDMI. Подключите XIAO к Mac USB-кабелем с передачей данных.
+Disconnect HDMI while flashing. Connect the XIAO to the Mac with a USB data cable.
+
+## 1. Get an image
+
+Build it locally:
 
 ```sh
-cd hdmi-cec
-python3 cec.py setup
-.venv/bin/python cec.py doctor
-.venv/bin/python cec.py build
-.venv/bin/python tests/run.py
+python3 .agents/skills/_shared/cec.py setup     # once: toolchain, venv, submodules
+python3 .agents/skills/_shared/cec.py build
+hdmi-cec/.venv/bin/python hdmi-cec/tests/run.py
 ```
 
-Должны появиться `build/host-rp2350/pico-cec.uf2`, `.elf` и `manifest.json`.
-Проверка `picotool info -a build/host-rp2350/pico-cec.uf2` должна показать RP2350,
-`seeed_xiao_rp2350` и ARM Secure.
+This produces `hdmi-cec/build/host-rp2350/pico-cec.uf2`, `.elf` and `manifest.json`.
+`picotool info -a hdmi-cec/build/host-rp2350/pico-cec.uf2` must show RP2350,
+`seeed_xiao_rp2350` and ARM Secure.
 
-## 2. Первая запись через BOOTSEL
+Or download a published release (UF2 and manifest, checked against `SHA256SUMS`):
 
-1. Отключите USB.
-2. Удерживая BOOT, подключите USB и отпустите BOOT.
-3. Альтернатива при подключённой плате: удерживайте BOOT, нажмите и отпустите RESET,
-   затем отпустите BOOT.
-4. Выполните `picotool info -a` и убедитесь, что обнаружен RP2350.
-5. Запишите и проверьте образ:
+```sh
+python3 .agents/skills/_shared/cec.py download                       # latest
+python3 .agents/skills/_shared/cec.py download --tag hdmi-cec-v0.7.0
+```
+
+Files land in `hdmi-cec/build/releases/<tag>/`; pass that UF2 to `flash --image`.
+
+## 2. First flash through BOOTSEL
+
+1. Unplug USB.
+2. Hold BOOT, plug in USB, release BOOT.
+3. Alternative with the board connected: hold BOOT, press and release RESET, then release BOOT.
+4. Run `picotool info -a` and check that an RP2350 is detected.
+5. Flash and verify:
 
    ```sh
-   .venv/bin/python cec.py flash
+   python3 .agents/skills/_shared/cec.py flash
+   python3 .agents/skills/_shared/cec.py flash --image hdmi-cec/build/releases/<tag>/pico-cec.uf2
    ```
 
-Если подключено несколько загрузчиков, утилита напечатает варианты; повторите команду
-с `--bus N --address M`. Журнал версии и SHA-256 сохраняется в `build/flash-records/`.
+With several boards in BOOTSEL the tool prints the choices; repeat with `--bus N --address M`.
+Each attempt writes the version, SHA-256 and verification result to
+`hdmi-cec/build/flash-records/`.
 
-## 3. Последующие записи
+## 3. Re-flashing a running board
 
-Когда USB-консоль работает:
-
-```sh
-.venv/bin/python cec.py build
-.venv/bin/python cec.py flash --bootsel
-```
-
-При нескольких CDC-устройствах добавьте `--port /dev/cu.usbmodem…`. Если переход в
-загрузчик не сработал, используйте BOOT/RESET из предыдущего раздела.
-
-## 4. Проверить пассивный запуск
+When the USB console works, the tool reboots the board into BOOTSEL itself:
 
 ```sh
-.venv/bin/python cec.py monitor --command "show version"
-.venv/bin/python cec.py monitor --command "cec status 1"
+python3 .agents/skills/_shared/cec.py flash --bootsel
 ```
 
-Версия должна начинаться с `cec-host-0.7.0`. После reset плата только инициализирует
-USB и CEC: она ничего не отправляет сама.
+With several CDC devices add `--port /dev/cu.usbmodem…`. If the board does not enter the
+bootloader, use BOOT/RESET from the previous section.
 
-Ручная проверка протокола:
+## 4. Check the passive start
 
-```text
-cec submit 1 raw 4004
-cec status 1
-cec submit 2 raw 4f822000
-cec status 2
-cec submit 3 raw 4036
-cec status 3
+```sh
+python3 .agents/skills/_shared/cec.py monitor --command "show version"
+python3 .agents/skills/_shared/cec.py monitor --command "cec status 1"
 ```
 
-Диагностика линии CEC: `cec line` измеряет её 200 мс. `high=2000/2000` — линия подтянута ТВ;
-`high=0/2000` — подтяжки нет, команды завершатся `busy`/`collision`. Для эксперимента
-`cec pullup on|off` включает внутреннюю подтяжку пина до сброса; результат `nack` значит,
-что на шине никто не подтверждает кадры.
-`cec scan` показывает, на каком выводе платы читается высокий уровень (поиск перепутанного пина).
+The version must match `version` in the image's `manifest.json` (`cec-host-<VERSION>-<hash>`).
+After reset the board only initialises USB and CEC: it sends nothing by itself.
 
-Ответы имеют вид `@cec id=1 state=queued`, затем
-`@cec id=1 state=done result=ack|nack|busy|timeout|collision|error`.
+Console commands and CEC line diagnostics: [DIAGNOSTICS.md](DIAGNOSTICS.md).
 
-## 5. Ручная запись UF2
+## 5. Manual UF2 copy
 
-1. Введите плату в BOOTSEL.
-2. Проверьте её через `picotool info -a`.
-3. Скопируйте `build/host-rp2350/pico-cec.uf2` на диск `RP2350`.
-4. Дождитесь исчезновения диска и появления USB-консоли.
-5. При необходимости повторно войдите в BOOTSEL и выполните:
+1. Put the board into BOOTSEL.
+2. Check it with `picotool info -a`.
+3. Copy `pico-cec.uf2` to the `RP2350` drive.
+4. Wait for the drive to disappear and the USB console to appear.
+5. Optionally re-enter BOOTSEL and run:
 
    ```sh
-   picotool verify build/host-rp2350/pico-cec.uf2
+   picotool verify hdmi-cec/build/host-rp2350/pico-cec.uf2
    picotool reboot
    ```
 
-## Если что-то не работает
+## Troubleshooting
 
-- **Нет диска RP2350.** Повторите BOOT/RESET, замените кабель на кабель с данными,
-  подключите плату напрямую без хаба.
-- **Консоль не найдена.** Закройте программы, занявшие порт, и выполните
-  `.venv/bin/python -m serial.tools.list_ports -v`.
-- **После записи ТВ включается от питания.** Проверьте `show version`: на плате осталась
-  старая `cec-wake-0.5.0`, повторите запись `cec-host-0.7.0`.
-- **CEC-команда не действует.** Проверьте HDMI pins 13/17, CEC в меню ТВ и результат
-  `cec status`. `nack` и `busy` — результат шины, а не подтверждение состояния экрана.
+- **No RP2350 drive.** Repeat BOOT/RESET, use a data cable, connect the board directly
+  without a hub.
+- **Console not found.** Close programs holding the port and run
+  `hdmi-cec/.venv/bin/python -m serial.tools.list_ports -v`. The adapter is VID:PID `CAFE:4005`.
+- **The TV turns on at power-up after flashing.** Check `show version`: the board still runs the
+  old `cec-wake-0.5.0`; flash `cec-host` again.
+- **A CEC command has no effect.** Check HDMI pins 13/17, CEC in the TV menu and the
+  `cec status` result. `nack` and `busy` are bus results, not confirmation of the screen state.

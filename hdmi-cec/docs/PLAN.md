@@ -1,7 +1,8 @@
-# Host-driven версия 0.7.0
+# Host-driven version
 
-Реализованы пассивная прошивка, машинный USB-протокол и один Windows EXE с режимами
-службы, установки, удаления и пользовательской CLI. Архитектура разделяет CEC-устройство,
-последовательности, конфигурацию и Windows-адаптеры, поэтому основная логика тестируется на Mac.
+Implemented: passive firmware, a machine-readable USB protocol and one Windows EXE with
+service, install, uninstall, self-update and user CLI modes. The architecture separates the CEC
+device, frame sequences, configuration and the Windows adapters, so the core logic is tested
+on a Mac.
 
-Оставшиеся физические этапы отмечены в [VALIDATION.md](VALIDATION.md).
+The remaining physical checks are listed in [VALIDATION.md](VALIDATION.md).

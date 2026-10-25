@@ -12,6 +12,6 @@ commands=[
   "-g","-I",str(ROOT/"tests/stubs"),
   "-I",str(ROOT/"firmware/include"),str(ROOT/"tests/test_frame.c"),"-o",str(OUT/"frame")],
  [str(OUT/"command")],[str(OUT/"frame")],
- [sys.executable,"-m","unittest","discover","-s",str(ROOT/"tests"),"-p","test_*.py","-v"]]
+ [sys.executable,"-m","unittest","discover","-s",str(ROOT.parent/".agents/skills/_shared"),"-p","test_*.py","-v"]]
 for cmd in commands:
     subprocess.run(cmd,cwd=ROOT,check=True,timeout=30)

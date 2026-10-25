@@ -30,6 +30,10 @@ func Install() error {
 		return err
 	}
 	defer s.Close()
+	if err := configureRecovery(s); err != nil {
+		_ = s.Delete()
+		return err
+	}
 	if err := eventlog.InstallAsEventCreate(ServiceName, eventlog.Info|eventlog.Warning|eventlog.Error); err != nil {
 		_ = s.Delete()
 		return err

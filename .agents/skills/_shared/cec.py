@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and flash the host-driven XIAO RP2350 CEC adapter."""
+"""Build, flash and talk to the host-driven XIAO RP2350 CEC adapter."""
 from pathlib import Path
 import argparse
 import datetime
@@ -16,15 +16,20 @@ import tarfile
 import time
 import urllib.request
 
-ROOT = Path(__file__).resolve().parent
+TOOLING = Path(__file__).resolve().parent
+ROOT = TOOLING.parents[2] / "hdmi-cec"
 FW = ROOT / "firmware"
 BUILD = ROOT / "build" / "host-rp2350"
 TOOLS = ROOT / ".tools"
+VENV = ROOT / ".venv"
 TOOLCHAIN_NAME = "arm-gnu-toolchain-14.3.rel1-darwin-arm64-arm-none-eabi"
 TOOLCHAIN = TOOLS / TOOLCHAIN_NAME
 ARM_URL = "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/" + TOOLCHAIN_NAME + ".tar.xz"
 ARM_SHA = "30f4d08b219190a37cded6aa796f4549504902c53cfc3c7e044a8490b6eba1f7"
-VERSION = "cec-host-0.7.0"
+VERSION_PREFIX = "cec-host-"
+VERSION = VERSION_PREFIX + (ROOT / "VERSION").read_text().strip()
+REPO = "alexander-litvinovich/entertainment-center"
+TAG_PREFIX = "hdmi-cec-v"
 
 def run(*cmd, capture=False, cwd=ROOT, timeout=600):
     cmd = [str(x) for x in cmd]
@@ -68,15 +73,14 @@ def setup(_):
             temporary.replace(archive)
         with tarfile.open(archive) as t:
             t.extractall(TOOLS, filter="data")
-    venv = ROOT / ".venv"
-    if not (venv / "bin/python").exists():
-        run(sys.executable, "-m", "venv", venv)
-    run(venv / "bin/python", "-m", "pip", "install", "-r", ROOT / "requirements.txt")
+    if not (VENV / "bin/python").exists():
+        run(sys.executable, "-m", "venv", VENV)
+    run(VENV / "bin/python", "-m", "pip", "install", "-r", TOOLING / "requirements.txt")
     # Only what the RP2350 build needs: the SDK's TinyUSB, not its Wi-Fi/TLS stacks.
     run("git", "-C", ROOT, "submodule", "update", "--init", "firmware/pico-sdk",
         "firmware/FreeRTOS-Kernel", "firmware/tcli", timeout=1800)
     run("git", "-C", FW / "pico-sdk", "submodule", "update", "--init", "lib/tinyusb", timeout=1800)
-    run(venv / "bin/python", ROOT / "cec.py", "doctor")
+    run(VENV / "bin/python", Path(__file__).resolve(), "doctor")
 
 def doctor(_):
     check_sources()
@@ -186,7 +190,7 @@ def flash(args):
     image = Path(args.image).resolve() if args.image else BUILD / "pico-cec.uf2"
     validate_uf2(image)
     manifest = json.loads(image.with_name("manifest.json").read_text())
-    if manifest["board"] != "seeed_xiao_rp2350" or not manifest["version"].startswith(VERSION):
+    if manifest["board"] != "seeed_xiao_rp2350" or not manifest["version"].startswith(VERSION_PREFIX):
         raise RuntimeError("This command only flashes our host-driven firmware for XIAO RP2350")
     if sha(image) != manifest["sha256"]["pico-cec.uf2"]:
         raise RuntimeError("Image checksum differs from build manifest")
@@ -225,7 +229,37 @@ def flash(args):
     finally:
         record_path.write_text(json.dumps(record, indent=2) + "\n")
     print("Flash verified and reboot requested. Record:", record_path)
-    print("Run monitor to confirm cec-host-0.6.0 startup; reset must not create CEC traffic.")
+    print(f"Run `monitor --command \"show version\"`; expect {manifest['version']}. "
+          "Reset must not create CEC traffic.")
+
+def github(url):
+    request = urllib.request.Request(url, headers={"User-Agent": "hdmi-cec-tooling",
+                                                   "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return response.read()
+
+def download(args):
+    if args.tag:
+        release = json.loads(github(f"https://api.github.com/repos/{REPO}/releases/tags/{args.tag}"))
+    else:
+        releases = json.loads(github(f"https://api.github.com/repos/{REPO}/releases?per_page=30"))
+        releases = [r for r in releases if r["tag_name"].startswith(TAG_PREFIX)
+                    and not r["draft"] and not r["prerelease"]]
+        if not releases:
+            raise RuntimeError("No published hdmi-cec release")
+        release = max(releases, key=lambda r: tuple(int(x) for x in r["tag_name"][len(TAG_PREFIX):].split(".")))
+    assets = {a["name"]: a["browser_download_url"] for a in release["assets"]}
+    target = ROOT / "build" / "releases" / release["tag_name"]
+    target.mkdir(parents=True, exist_ok=True)
+    sums = dict(reversed(line.split()) for line in github(assets["SHA256SUMS"]).decode().splitlines() if line)
+    for name in ("pico-cec.uf2", "manifest.json"):
+        data = github(assets[name])
+        if hashlib.sha256(data).hexdigest() != sums[name]:
+            raise RuntimeError(f"{name} checksum differs from SHA256SUMS")
+        (target / name).write_bytes(data)
+    validate_uf2(target / "pico-cec.uf2")
+    print("Downloaded", release["tag_name"], "to", target)
+    print("Flash with: flash --image", target / "pico-cec.uf2")
 
 def monitor(args):
     port = serial_port(args.port)
@@ -236,13 +270,18 @@ def monitor(args):
         run(sys.executable, "-m", "serial.tools.miniterm", port, "115200", "--raw", timeout=None)
 
 def main():
+    in_venv = Path(sys.prefix).resolve() == VENV.resolve()
+    if not in_venv and (VENV / "bin/python").exists() and sys.argv[1:2] != ["setup"]:
+        os.execv(VENV / "bin/python", [str(VENV / "bin/python"), __file__, *sys.argv[1:]])
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("setup", "doctor", "build", "flash", "monitor"):
+    for name in ("setup", "doctor", "build", "download", "flash", "monitor"):
         p = sub.add_parser(name)
         p.set_defaults(handler=globals()[name])
         if name in ("flash", "monitor"):
             p.add_argument("--port")
+        if name == "download":
+            p.add_argument("--tag", help="Release tag, e.g. hdmi-cec-v0.7.0; default: latest")
         if name == "flash":
             p.add_argument("--image")
             p.add_argument("--bus", type=int)
@@ -254,7 +293,7 @@ def main():
     args = parser.parse_args()
     try:
         args.handler(args)
-    except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as e:
+    except (RuntimeError, ValueError, KeyError, OSError, subprocess.SubprocessError) as e:
         print("Error:", e, file=sys.stderr)
         if isinstance(e, subprocess.CalledProcessError) and e.stdout:
             print(e.stdout, file=sys.stderr)

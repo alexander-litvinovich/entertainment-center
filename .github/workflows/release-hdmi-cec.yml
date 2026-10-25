@@ -1,0 +1,66 @@
+name: Release hdmi-cec
+
+on:
+  push:
+    tags: ["hdmi-cec-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hdmi-cec/host
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches hdmi-cec/VERSION
+        run: test "${GITHUB_REF_NAME#hdmi-cec-v}" = "$(cat ../VERSION)"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: hdmi-cec/host/go.mod
+          cache-dependency-path: hdmi-cec/host/go.sum
+      - run: go test ./...
+      - run: GOOS=windows go vet ./...
+      - name: Build Windows binary
+        run: GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=$(cat ../VERSION)" -o ../build/hdmi-cec.exe ./cmd/hdmi-cec
+      - uses: actions/upload-artifact@v4
+        with:
+          name: host
+          path: hdmi-cec/build/hdmi-cec.exe
+
+  firmware:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: hdmi-cec/.tools
+          key: arm-gnu-toolchain-14.3.rel1-darwin-arm64
+      - run: python3 .agents/skills/_shared/cec.py setup
+      - run: python3 .agents/skills/_shared/cec.py build
+      - run: hdmi-cec/.venv/bin/python hdmi-cec/tests/run.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: |
+            hdmi-cec/build/host-rp2350/pico-cec.uf2
+            hdmi-cec/build/host-rp2350/pico-cec.elf
+            hdmi-cec/build/host-rp2350/manifest.json
+
+  release:
+    needs: [host, firmware]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "hdmi-cec ${GITHUB_REF_NAME#hdmi-cec-v}" --generate-notes

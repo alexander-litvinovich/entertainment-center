@@ -15,7 +15,11 @@ import (
 	"strings"
 )
 
+// version is set at release build time: -ldflags "-X main.version=0.7.0".
+var version = "dev"
+
 func main() {
+	winhost.Version = version
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "hdmi-cec:", err)
 		os.Exit(1)
@@ -43,7 +47,10 @@ func run(args []string) error {
 		return winhost.Install()
 	case "uninstall":
 		return winhost.Uninstall()
-	case "on", "off", "status":
+	case "version":
+		fmt.Println(version)
+		return nil
+	case "on", "off", "status", "update":
 		if len(args) != 1 {
 			return usage()
 		}
@@ -86,12 +93,14 @@ func send(request ipc.Request) error {
 	if !response.OK {
 		return fmt.Errorf("%s", response.Message)
 	}
-	if response.Status != nil {
+	if response.Message != "" {
+		fmt.Println(response.Message)
+	} else if response.Status != nil {
 		data, _ := json.MarshalIndent(response.Status, "", "  ")
 		fmt.Println(string(data))
 	}
 	return nil
 }
 func usage() error {
-	return fmt.Errorf("usage: hdmi-cec <on|off|input HDMI1..HDMI4|input 2.1.0.0|send 4F:82:20:00|status|setup|run [--auto] [--config file]|install|uninstall|service>")
+	return fmt.Errorf("usage: hdmi-cec <on|off|input HDMI1..HDMI4|input 2.1.0.0|send 4F:82:20:00|status|setup|update|version|run [--auto] [--config file]|install|uninstall|service>")
 }

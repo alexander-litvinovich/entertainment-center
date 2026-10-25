@@ -5,12 +5,15 @@ package winhost
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"time"
 
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/eventlog"
 	"hdmi-cec-host/internal/core"
 	"hdmi-cec-host/internal/device"
+	"hdmi-cec-host/internal/update"
 )
 
 const (
@@ -45,13 +48,21 @@ func (h serviceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, s
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	server, err := StartPipeServer(ctx, controller, pipeSDDL)
+	updater := newAutoUpdater(h.configPath, logger)
+	server, err := StartPipeServer(ctx, controller, pipeSDDL, updater.Run)
 	if err != nil {
 		logger.Error("start named pipe: " + err.Error())
 		return false, 3
 	}
 	defer server.Close()
-	logger.Info("service started")
+	logger.Info("service started, version " + Version)
+	if exe, exeErr := os.Executable(); exeErr == nil {
+		update.Cleanup(exe)
+	}
+	if err := ensureRecovery(); err != nil {
+		logger.Error("configure restart-on-failure: " + err.Error())
+	}
+	go updater.loop(ctx)
 	if reason, reasonErr := svc.DynamicStartReason(); reasonErr != nil {
 		logger.Error("read service start reason: " + reasonErr.Error())
 	} else if reason == svc.StartReasonAuto || reason == svc.StartReasonDelayedAuto {
@@ -61,7 +72,20 @@ func (h serviceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, s
 	}
 	accepted := svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPowerEvent
 	statuses <- svc.Status{State: svc.Running, Accepts: accepted}
-	for request := range requests {
+	for {
+		var request svc.ChangeRequest
+		select {
+		case request = <-requests:
+		case <-updater.restart:
+			// Let a running on -> input sequence finish before the restart.
+			for i := 0; i < 30 && controller.Status().AutoActive; i++ {
+				time.Sleep(time.Second)
+			}
+			statuses <- svc.Status{State: svc.StopPending}
+			cancel()
+			logger.Info("service stopping to restart the updated binary")
+			return true, exitUpdated
+		}
 		switch request.Cmd {
 		case svc.Interrogate:
 			statuses <- request.CurrentStatus
@@ -77,7 +101,6 @@ func (h serviceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, s
 			return false, 0
 		}
 	}
-	return false, 0
 }
 func DefaultConfigPath(programData string) string {
 	return filepath.Join(programData, "HdmiCecHost", "config.json")

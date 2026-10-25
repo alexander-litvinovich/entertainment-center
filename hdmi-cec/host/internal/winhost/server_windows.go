@@ -21,17 +21,19 @@ const pipeSDDL = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)"
 type PipeServer struct {
 	ctx        context.Context
 	controller *core.Controller
+	update     func(context.Context) (string, error)
 	listener   net.Listener
 	wg         sync.WaitGroup
 }
 
-func StartPipeServer(ctx context.Context, controller *core.Controller, sddl string) (*PipeServer, error) {
+// StartPipeServer serves CLI requests; update is nil when the host cannot update itself.
+func StartPipeServer(ctx context.Context, controller *core.Controller, sddl string, update func(context.Context) (string, error)) (*PipeServer, error) {
 	// go-winio creates pipes with FILE_PIPE_REJECT_REMOTE_CLIENTS.
 	listener, err := winio.ListenPipe(ipc.PipeName, &winio.PipeConfig{SecurityDescriptor: sddl, InputBufferSize: 4096, OutputBufferSize: 4096})
 	if err != nil {
 		return nil, err
 	}
-	s := &PipeServer{ctx: ctx, controller: controller, listener: listener}
+	s := &PipeServer{ctx: ctx, controller: controller, update: update, listener: listener}
 	s.wg.Add(1)
 	go s.serve()
 	return s, nil
@@ -60,7 +62,14 @@ func (s *PipeServer) handle(conn net.Conn) {
 	_ = conn.SetReadDeadline(time.Time{})
 	ctx := s.ctx
 	var err error
+	var message string
 	switch req.Command {
+	case "update":
+		if s.update == nil {
+			err = errors.New("update runs only in the installed service")
+		} else {
+			message, err = s.update(ctx)
+		}
 	case "on":
 		err = s.controller.ManualOn(ctx)
 	case "off":
@@ -78,7 +87,7 @@ func (s *PipeServer) handle(conn net.Conn) {
 	default:
 		err = errors.New("unknown command")
 	}
-	response := ipc.Response{OK: err == nil}
+	response := ipc.Response{OK: err == nil, Message: message}
 	if err != nil {
 		response.Message = err.Error()
 	}

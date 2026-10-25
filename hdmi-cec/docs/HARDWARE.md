@@ -1,43 +1,46 @@
-# Подключение отдельного HDMI-CEC адаптера
+# Wiring the standalone HDMI-CEC adapter
 
-Плата: Seeed Studio XIAO RP2350. Один HDMI Type A male в свободный порт ТВ.
-Видео компьютера подключено отдельным кабелем.
+Board: Seeed Studio XIAO RP2350. One HDMI Type A male plug goes into a free TV port.
+The PC's video runs over a separate cable.
 
-| Сигнал | Контакт HDMI | XIAO | GPIO |
+| Signal | HDMI pin | XIAO | GPIO |
 | --- | --- | --- | --- |
 | CEC | 13 | D10 | 3 |
 | DDC/CEC Ground | 17 | GND | — |
 
-Питание подаётся на USB-C XIAO. HDMI pin 18, pins 15/16 DDC и видеолинии не подключаются.
-Не соединяйте USB 5V с HDMI 5V. Маркировку разъёма проверьте со стороны пайки:
-она зеркальна относительно вида со стороны контактов.
+The XIAO is powered through its USB-C port. HDMI pin 18, pins 15/16 (DDC) and the video lines
+stay unconnected. Never join USB 5 V to HDMI 5 V. Check the connector pin numbering from the
+solder side: it is mirrored relative to the contact side.
 
-Прошивка притягивает CEC к земле либо освобождает линию. Активный высокий уровень не выдаёт.
-Внутренние подтяжки GPIO отключены, как у upstream. В этой сборке используется подтяжка существующей CEC-шины ТВ.
-Перед первым тестом проверьте отсутствие замыканий и уровень свободной линии относительно HDMI pin 17.
-Работу при выключенном питании XIAO, включая влияние на общую CEC-шину и ревизию RP2350, проверить на фактической сборке.
-Если линия не поднимается либо адаптер мешает остальным устройствам, аппаратный интерфейс требует доработки; программные повторы это не исправят.
+The firmware pulls CEC to ground or releases the line; it never drives it high. The GPIO's
+internal pulls are disabled, as upstream; this build relies on the pull-up of the TV's
+existing CEC bus. Before the first test check for shorts and measure the idle line level
+against HDMI pin 17. Behaviour with the XIAO unpowered, including the effect on the shared CEC
+bus and the RP2350 revision, must be checked on the actual build. If the line does not rise or
+the adapter disturbs other devices, the hardware interface needs rework; software retries
+will not fix it.
 
-Отдельный адаптер не вмешивается в видеокабель и не объявляет себя активным HDMI-источником.
-Режим без EDID ограничен включением и базовыми ответами CEC. Полная совместимость со всеми ТВ не подтверждена.
+The standalone adapter does not touch the video cable and does not announce itself as the
+active HDMI source. Without EDID the mode is limited to power-on and basic CEC responses.
+Compatibility with every TV is not confirmed.
 
-## Данные фактической сборки
+## Actual build
 
-| Параметр | Значение |
+| Parameter | Value |
 | --- | --- |
-| Плата | Seeed Studio XIAO RP2350 |
-| Ревизия платы / кристалла | Ещё не записана |
-| Модель ТВ и настройки CEC | Ещё не записаны |
-| HDMI-порт адаптера | Ещё не записан |
-| Источник USB-питания | Уточнить при испытании |
-| USB действительно отключается между запусками | Проверить |
-| Фактическая пайка и уровень свободной линии | Проверить |
+| Board | Seeed Studio XIAO RP2350 |
+| Board / chip revision | Not recorded yet |
+| TV model and CEC settings | Not recorded yet |
+| Adapter's HDMI port | Not recorded yet |
+| USB power source | To be confirmed during testing |
+| USB really powers off between boots | To be checked |
+| Soldering and idle line level | To be checked |
 
-Питание от USB телевизора может появляться только после включения экрана и тогда не подходит для его пробуждения.
-В первую очередь проверяем USB компьютера либо отдельного блока питания.
+TV USB power may appear only after the screen turns on, which makes it unsuitable for waking
+the TV. Test the PC's USB or a separate power supply first.
 
-## Источники
+## Sources
 
-- [pico-cec: аппаратная часть](https://github.com/gkoh/pico-cec#hardware).
+- [pico-cec: hardware](https://github.com/gkoh/pico-cec#hardware).
 - [Seeed: XIAO RP2350](https://wiki.seeedstudio.com/xiao_rp2350_arduino/).
 - [RP2350 datasheet](https://datasheets.raspberrypi.com/rp2350/rp2350-datasheet.pdf).

@@ -137,6 +137,17 @@ func (c *Controller) SetInput(ctx context.Context, value string) error {
 	return c.execute(ctx, Command{Name: "input", Address: address})
 }
 
+// Probe switches the TV to an input without saving it.
+func (c *Controller) Probe(ctx context.Context, value string) error {
+	address, normalized, err := ParseAddress(value)
+	if err != nil {
+		return err
+	}
+	c.cancelAuto()
+	c.log.Info("user action: probe input " + normalized)
+	return c.execute(ctx, Command{Name: "input", Address: address})
+}
+
 func (c *Controller) sequence(ctx context.Context) error {
 	onErr := c.execute(ctx, Command{Name: "on"})
 	c.mu.Lock()

@@ -67,6 +67,8 @@ func (s *PipeServer) handle(conn net.Conn) {
 		err = s.controller.Off(ctx)
 	case "input":
 		err = s.controller.SetInput(ctx, req.Input)
+	case "probe":
+		err = s.controller.Probe(ctx, req.Input)
 	case "status":
 		status := s.controller.Status()
 		_ = json.NewEncoder(conn).Encode(ipc.Response{OK: true, Status: &status})

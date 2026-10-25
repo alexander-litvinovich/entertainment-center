@@ -34,6 +34,11 @@ func run(args []string) error {
 		return winhost.RunService(winhost.DefaultConfigPath(programData))
 	case "run":
 		return runConsole(args[1:])
+	case "setup":
+		if len(args) != 1 {
+			return usage()
+		}
+		return runSetup()
 	case "install":
 		return winhost.Install()
 	case "uninstall":
@@ -83,5 +88,5 @@ func send(request ipc.Request) error {
 	return nil
 }
 func usage() error {
-	return fmt.Errorf("usage: hdmi-cec <on|off|input HDMI1..HDMI4|input 2.1.0.0|status|run [--auto] [--config file]|install|uninstall|service>")
+	return fmt.Errorf("usage: hdmi-cec <on|off|input HDMI1..HDMI4|input 2.1.0.0|status|setup|run [--auto] [--config file]|install|uninstall|service>")
 }

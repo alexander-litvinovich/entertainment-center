@@ -4,12 +4,17 @@ package winhost
 
 import (
 	"fmt"
-	"golang.org/x/sys/windows/svc/eventlog"
-	"golang.org/x/sys/windows/svc/mgr"
 	"os"
 	"os/exec"
+	"syscall"
+
+	"golang.org/x/sys/windows/svc"
+	"golang.org/x/sys/windows/svc/eventlog"
+	"golang.org/x/sys/windows/svc/mgr"
 )
 
+// Install creates and starts the service. If it already exists, Install points it at this EXE
+// and starts it, so re-running it upgrades or moves an installation.
 func Install() error {
 	_ = exec.Command("schtasks.exe", "/Delete", "/TN", "HDMI CEC Wake", "/F").Run()
 	exe, err := os.Executable()
@@ -22,8 +27,8 @@ func Install() error {
 	}
 	defer m.Disconnect()
 	if existing, openErr := m.OpenService(ServiceName); openErr == nil {
-		existing.Close()
-		return fmt.Errorf("service %s is already installed", ServiceName)
+		defer existing.Close()
+		return reconfigure(existing, exe)
 	}
 	s, err := m.CreateService(ServiceName, exe, mgr.Config{DisplayName: DisplayName, Description: "Host-controlled HDMI-CEC adapter", StartType: mgr.StartAutomatic, ServiceStartName: "LocalSystem"}, "service")
 	if err != nil {
@@ -40,6 +45,33 @@ func Install() error {
 	}
 	if err := s.Start(); err != nil {
 		return fmt.Errorf("installed, but could not start service: %w", err)
+	}
+	return nil
+}
+
+func reconfigure(s *mgr.Service, exe string) error {
+	cfg, err := s.Config()
+	if err != nil {
+		return err
+	}
+	cfg.BinaryPathName = syscall.EscapeArg(exe) + " service"
+	cfg.StartType = mgr.StartAutomatic
+	if err := s.UpdateConfig(cfg); err != nil {
+		return err
+	}
+	if err := configureRecovery(s); err != nil {
+		return err
+	}
+	status, err := s.Query()
+	if err != nil {
+		return err
+	}
+	if status.State == svc.Running {
+		fmt.Println("service is already installed and running; stop it first to run a new EXE")
+		return nil
+	}
+	if err := s.Start(); err != nil {
+		return fmt.Errorf("updated the service, but could not start it: %w", err)
 	}
 	return nil
 }

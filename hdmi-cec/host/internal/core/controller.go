@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -113,8 +114,86 @@ func (c *Controller) ManualOn(ctx context.Context) error {
 }
 
 func (c *Controller) Off(ctx context.Context) error {
-	c.cancelAuto()
 	c.log.Info("user action: off")
+	return c.standby(ctx)
+}
+
+// PowerEvent is a Windows power transition the service reacts to.
+type PowerEvent string
+
+const (
+	Startup  PowerEvent = "startup"
+	Wake     PowerEvent = "wake"
+	Sleep    PowerEvent = "sleep"
+	Shutdown PowerEvent = "shutdown"
+)
+
+// HandlePowerEvent turns the TV on or off when the config enables it for the event.
+// Turning on runs in the background; turning off returns once Standby is sent.
+func (c *Controller) HandlePowerEvent(ctx context.Context, event PowerEvent, detail string) error {
+	c.mu.Lock()
+	cfg := c.cfg
+	c.mu.Unlock()
+	var enabled, turnOn bool
+	switch event {
+	case Startup:
+		enabled, turnOn = cfg.TurnOn.Startup, true
+	case Wake:
+		enabled, turnOn = cfg.TurnOn.Wake, true
+	case Sleep:
+		enabled = cfg.TurnOff.Sleep
+	case Shutdown:
+		enabled = cfg.TurnOff.Shutdown
+	default:
+		return fmt.Errorf("unknown power event %q", event)
+	}
+	reason := string(event)
+	if detail != "" {
+		reason += " (" + detail + ")"
+	}
+	switch {
+	case !enabled:
+		c.log.Info(reason + ": TV control is disabled for this event")
+		return nil
+	case turnOn:
+		c.TriggerAuto(ctx, reason)
+		return nil
+	default:
+		c.log.Info("automatic standby: " + reason)
+		return c.standby(ctx)
+	}
+}
+
+// Config returns the active configuration.
+func (c *Controller) Config() Config {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cfg
+}
+
+// SetConfig validates and saves a whole configuration without sending CEC frames.
+func (c *Controller) SetConfig(cfg Config) (Config, error) {
+	cfg, err := cfg.Normalize()
+	if err != nil {
+		return cfg, err
+	}
+	if err := c.store.Save(cfg); err != nil {
+		return cfg, err
+	}
+	c.mu.Lock()
+	c.cfg = cfg
+	c.mu.Unlock()
+	c.log.Info(fmt.Sprintf("config saved: input %q, turn on %+v, turn off %+v", cfg.Input, cfg.TurnOn, cfg.TurnOff))
+	return cfg, nil
+}
+
+// standby cancels a pending input switch, announces the adapter and sends Standby.
+func (c *Controller) standby(ctx context.Context) error {
+	c.cancelAuto()
+	// The 30 s coalescing only drops duplicate turn-on events; after Standby the next one must run.
+	c.mu.Lock()
+	c.lastAuto = time.Time{}
+	c.mu.Unlock()
 	announceErr := c.announce(ctx)
 	if err := c.execute(ctx, Command{Name: "off", Frame: FrameOff()}); err != nil {
 		return err

@@ -33,7 +33,9 @@ matches `VERSION`, runs the tests, builds `hdmi-cec.exe` (Linux runner) and the 
 `pico-cec.elf`, `manifest.json` and `SHA256SUMS`.
 
 Installed Windows services pick the release up within 24 hours, or immediately with
-`hdmi-cec.exe update`. Boards are flashed by hand:
+`hdmi-cec.exe update`. New installs get it through [`install.ps1`](../install.ps1), which
+always takes the highest published release. The script itself is served from `master`, so a
+change to it is live as soon as it is pushed. Boards are flashed by hand:
 `python3 .agents/skills/_shared/cec.py download` and then `flash --image …`
 ([FLASHING.md](FLASHING.md)).
 

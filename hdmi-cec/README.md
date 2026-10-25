@@ -44,37 +44,66 @@ and never reads EDID: the host application builds the frame sequences.
 
 ## Windows 10/11 x64
 
-Download `hdmi-cec.exe` from the
+Install or update with one command in PowerShell (it asks for administrator rights):
+
+```powershell
+irm https://raw.githubusercontent.com/alexander-litvinovich/entertainment-center/master/hdmi-cec/install.ps1 | iex
+```
+
+[install.ps1](install.ps1) downloads `hdmi-cec.exe` from the
 [latest hdmi-cec release](https://github.com/alexander-litvinovich/entertainment-center/releases),
-or build it on a Mac:
+checks it against `SHA256SUMS`, installs it to `%ProgramFiles%\HdmiCecHost` (added to `PATH`),
+starts the `HdmiCecHost` service and, on a first install, opens the setup:
+
+```text
+HDMI-CEC Setup
+
+Video input: < 2 >
+
+Turn TV on:
+[x] Wake
+[x] Startup
+
+Turn TV off:
+[x] Sleep
+[x] Shutdown
+
+Save   Cancel
+```
+
+Without a saved input the setup first asks for the TV input number, or detects it by
+switching the TV through HDMI1…HDMI4. Open it again any time with `hdmi-cec setup`.
+
+User commands: `setup`, `on`, `off`, `input HDMI1`…`HDMI4`, `input 2.1.0.0`, `status`,
+`update`, `version`. Full installation and diagnostics guide:
+[docs/WINDOWS_SERVICE.md](docs/WINDOWS_SERVICE.md).
+
+The service turns the TV on when Windows starts or wakes from sleep, selects the saved input
+five seconds later, and puts the TV into standby when Windows sleeps or shuts down; each
+event can be switched off in the setup. A manual start or a service restart does not turn the
+TV on.
+
+The configuration lives in `%ProgramData%\HdmiCecHost\config.json`. The service updates
+itself from GitHub Releases once a day; see
+[docs/WINDOWS_SERVICE.md](docs/WINDOWS_SERVICE.md#updates).
+
+### Development and dry run
+
+The host builds and runs on macOS and Linux too. `--dry-run` replaces the adapter with a
+simulation that logs every CEC frame, so the CLI, the setup screens and the host logic can be
+tried on any machine:
 
 ```sh
 cd hdmi-cec/host
 go test ./...
+go run ./cmd/hdmi-cec setup --dry-run   # setup screens against a local config, no host needed
+go run ./cmd/hdmi-cec run --dry-run     # host in this terminal; in another one:
+go run ./cmd/hdmi-cec setup             #   setup, on, off, input HDMI2, status, …
 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-X main.version=$(cat ../VERSION)" -o ../build/windows-amd64/hdmi-cec.exe ./cmd/hdmi-cec
 ```
 
-Install from an elevated PowerShell on Windows:
-
-```powershell
-.\hdmi-cec.exe install
-.\hdmi-cec.exe input HDMI2
-.\hdmi-cec.exe status
-```
-
-User commands: `on`, `off`, `input HDMI1`…`HDMI4`, `input 2.1.0.0`, `status`, `update`,
-`version`. Full installation and diagnostics guide:
-[docs/WINDOWS_SERVICE.md](docs/WINDOWS_SERVICE.md).
-
-The service turns the TV on when Windows really starts automatically and on
-`PBT_APMRESUMEAUTOMATIC`. Five seconds later it selects the saved input. A manual start or a
-service restart does not turn the TV on; `off` is always manual.
-
-The configuration lives in `%ProgramData%\HdmiCecHost\config.json`. Until the first `input`
-command the TV turns on without switching inputs.
-
-The service updates itself from GitHub Releases once a day; see
-[docs/WINDOWS_SERVICE.md](docs/WINDOWS_SERVICE.md#updates).
+Outside Windows the host listens on a Unix socket in the temp directory instead of the named
+pipe; `install`, `uninstall` and `service` are Windows-only.
 
 ## Releases
 

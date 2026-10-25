@@ -13,13 +13,17 @@ import (
 	"golang.org/x/sys/windows/svc/eventlog"
 	"hdmi-cec-host/internal/core"
 	"hdmi-cec-host/internal/device"
+	"hdmi-cec-host/internal/ipc"
 	"hdmi-cec-host/internal/update"
 )
 
 const (
 	ServiceName           = "HdmiCecHost"
 	DisplayName           = "HDMI CEC Host"
+	pbtAPMSuspend         = 0x4
 	pbtAPMResumeAutomatic = 0x12
+	// Windows does not wait for a service to handle suspend, and waits only seconds at shutdown.
+	standbyTimeout = 5 * time.Second
 )
 
 type eventLogger struct{ log *eventlog.Log }
@@ -49,11 +53,12 @@ func (h serviceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, s
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	updater := newAutoUpdater(h.configPath, logger)
-	server, err := StartPipeServer(ctx, controller, pipeSDDL, updater.Run)
+	listener, err := ipc.Listen(ipc.LocalUsers)
 	if err != nil {
 		logger.Error("start named pipe: " + err.Error())
 		return false, 3
 	}
+	server := ipc.Serve(ctx, listener, ipc.Handler{Controller: controller, Update: updater.Run})
 	defer server.Close()
 	logger.Info("service started, version " + Version)
 	if exe, exeErr := os.Executable(); exeErr == nil {
@@ -66,11 +71,17 @@ func (h serviceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, s
 	if reason, reasonErr := svc.DynamicStartReason(); reasonErr != nil {
 		logger.Error("read service start reason: " + reasonErr.Error())
 	} else if reason == svc.StartReasonAuto || reason == svc.StartReasonDelayedAuto {
-		controller.TriggerAuto(ctx, fmt.Sprintf("service start reason %d", reason))
+		_ = controller.HandlePowerEvent(ctx, core.Startup, fmt.Sprintf("service start reason %d", reason))
 	} else {
 		logger.Info(fmt.Sprintf("service start reason %d does not trigger TV", reason))
 	}
-	accepted := svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPowerEvent
+	standby := func(event core.PowerEvent, detail string) {
+		standbyCtx, cancelStandby := context.WithTimeout(ctx, standbyTimeout)
+		defer cancelStandby()
+		_ = controller.HandlePowerEvent(standbyCtx, event, detail)
+	}
+	// Preshutdown makes SCM wait until the service stops, so Standby goes out before power-off.
+	accepted := svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPreShutdown | svc.AcceptPowerEvent
 	statuses <- svc.Status{State: svc.Running, Accepts: accepted}
 	for {
 		var request svc.ChangeRequest
@@ -91,10 +102,19 @@ func (h serviceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, s
 			statuses <- request.CurrentStatus
 		case svc.PowerEvent:
 			logger.Info(fmt.Sprintf("power event 0x%X", request.EventType))
-			if request.EventType == pbtAPMResumeAutomatic {
-				controller.TriggerAuto(ctx, "resume automatic")
+			switch request.EventType {
+			case pbtAPMResumeAutomatic:
+				_ = controller.HandlePowerEvent(ctx, core.Wake, "resume automatic")
+			case pbtAPMSuspend:
+				standby(core.Sleep, "suspend")
 			}
-		case svc.Stop, svc.Shutdown:
+		case svc.PreShutdown, svc.Shutdown:
+			statuses <- svc.Status{State: svc.StopPending, WaitHint: uint32((standbyTimeout + time.Second).Milliseconds())}
+			standby(core.Shutdown, "system shutdown")
+			cancel()
+			logger.Info("service stopped for system shutdown")
+			return false, 0
+		case svc.Stop:
 			statuses <- svc.Status{State: svc.StopPending}
 			cancel()
 			logger.Info("service stopped")

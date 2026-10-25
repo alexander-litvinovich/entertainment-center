@@ -9,8 +9,12 @@ CLI (Go).
 - `hdmi-cec/firmware/`: a fork of [gkoh/pico-cec](https://github.com/gkoh/pico-cec). Keep its
   `LICENSE` and the contributor list in `firmware/README.md`. `pico-sdk`, `FreeRTOS-Kernel` and
   `tcli` are submodules pinned to the commits recorded in git.
-- `hdmi-cec/host/`: Go host. `internal/core` is platform-neutral and tested on macOS;
-  Windows-only code lives in `internal/winhost` and `*_windows.go` files.
+- `hdmi-cec/host/`: Go host. Everything except the service builds and runs on macOS:
+  `internal/core` (CEC sequences, config, power events), `internal/ipc` (requests; named pipe
+  on Windows, Unix socket elsewhere), `internal/tui` (Bubble Tea setup screens; future
+  interactive screens go here too). Windows-only code lives in `internal/winhost` and
+  `*_windows.go` files.
+- `hdmi-cec/install.ps1`: one-command Windows installer, served from `master`.
 - `hdmi-cec/VERSION`: the single version for the firmware, the host EXE and the release tag
   `hdmi-cec-vX.Y.Z`.
 - `.agents/skills/`: agent skills. `_shared/cec.py` is the build, flash and console tool for
@@ -31,6 +35,8 @@ CLI (Go).
 
 - `hdmi-cec/.venv/bin/python hdmi-cec/tests/run.py`: firmware unit tests and tooling tests.
 - `cd hdmi-cec/host && go test ./... && GOOS=windows go vet ./...`
+- Without the adapter: `go run ./cmd/hdmi-cec run --dry-run` hosts a simulated adapter that logs
+  frames; `setup --dry-run` opens the setup screens on their own.
 - The firmware compiles only through `python3 .agents/skills/_shared/cec.py build`.
 
 ## Docs

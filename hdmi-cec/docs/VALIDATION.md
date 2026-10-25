@@ -8,6 +8,12 @@
 - The automatic sequence, event coalescing and cancelling a pending input with `off`.
 - Atomic input saving; version detection and machine responses with request IDs.
 - Self-update: release selection, SHA-256 check, binary swap.
+- Config defaults and legacy configs, the turn on/off options per power event, saving the
+  whole config through the host.
+- Setup screens (onboarding, detection, settings form) driven by key presses against a dry-run
+  controller; the CLI, `run --dry-run` and `setup` checked end to end on macOS.
+- `install.ps1`: parses in PowerShell 7; release lookup, download and checksum checked against
+  the published 0.7.0 release.
 - Native Go tests and the `windows/amd64` cross-build.
 - UF2 build for `seeed_xiao_rp2350`.
 
@@ -25,6 +31,11 @@
 | `hdmi-cec off` turns the TV off | Pending Windows |
 | The CLI works for a regular local user | Pending Windows |
 | Self-update installs a newer release and the service restarts without CEC traffic | Pending Windows |
+| `install.ps1` from a non-elevated PowerShell: UAC, install, PATH, onboarding | Pending Windows |
+| `install.ps1` over an existing installation keeps the config and restarts the service | Pending Windows |
+| `hdmi-cec setup` detection switches the TV and saves the chosen input | Pending Windows |
+| Sleep sends Standby before the PC suspends | Pending Windows |
+| Shutdown and restart send Standby | Pending Windows |
 
 The user confirmed earlier that this adapter and TV react to a single `Image View On` at
 power-up with the old firmware. The TV model and HDMI port are not recorded yet.

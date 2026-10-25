@@ -31,7 +31,7 @@ USB-протокол прошивки:
 
 ```text
 cec submit 1 raw 4004      # Image View On -> TV
-cec submit 2 raw 4f8220000 # (hex-кадр, 1..16 байт, отправитель всегда 4x)
+cec submit 2 raw 4f822000  # Active Source (hex-кадр 1..16 байт, отправитель 4x)
 cec status 2
 ```
 

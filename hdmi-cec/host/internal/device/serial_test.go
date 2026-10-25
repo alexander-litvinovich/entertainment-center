@@ -13,7 +13,7 @@ func TestParseResponseUsesMatchingID(t *testing.T) {
 }
 
 func TestVersionPattern(t *testing.T) {
-	for _, version := range []string{"cec-host-0.6.0", "cec-host-0.6.0-deadbeef"} {
+	for _, version := range []string{"cec-host-0.7.0", "cec-host-0.7.0-deadbeef"} {
 		if !versionRE.MatchString(version) {
 			t.Errorf("did not match %q", version)
 		}

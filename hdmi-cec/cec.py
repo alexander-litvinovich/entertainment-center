@@ -26,7 +26,7 @@ TOOLCHAIN = TOOLS / TOOLCHAIN_NAME
 ARM_URL = "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/" + TOOLCHAIN_NAME + ".tar.xz"
 ARM_SHA = "30f4d08b219190a37cded6aa796f4549504902c53cfc3c7e044a8490b6eba1f7"
 UPSTREAM = "8a5d4690461ae4f676f69511c51063b860789ff7"
-VERSION = "cec-host-0.6.0"
+VERSION = "cec-host-0.7.0"
 
 def run(*cmd, capture=False, cwd=ROOT, timeout=600):
     cmd = [str(x) for x in cmd]

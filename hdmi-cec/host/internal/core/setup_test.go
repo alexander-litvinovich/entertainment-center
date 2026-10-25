@@ -27,7 +27,7 @@ func TestProbeDoesNotSave(t *testing.T) {
 	if err := c.Probe(context.Background(), "HDMI3"); err != nil {
 		t.Fatal(err)
 	}
-	if store.cfg.Input != "1.0.0.0" || len(d.commands) != 1 || d.commands[0].Address != 0x3000 {
+	if store.cfg.Input != "1.0.0.0" || len(d.commands) != 2 || FormatFrame(d.commands[1].Frame) != "4F:82:30:00" {
 		t.Fatalf("config=%+v commands=%+v", store.cfg, d.commands)
 	}
 }

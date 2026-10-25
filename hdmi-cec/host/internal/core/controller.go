@@ -2,14 +2,14 @@ package core
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 )
 
+// Command is one CEC frame the adapter sends; Name labels it for status and logs.
 type Command struct {
-	Name    string
-	Address uint16
+	Name  string
+	Frame []byte
 }
 
 type DeviceStatus struct {
@@ -115,7 +115,11 @@ func (c *Controller) ManualOn(ctx context.Context) error {
 func (c *Controller) Off(ctx context.Context) error {
 	c.cancelAuto()
 	c.log.Info("user action: off")
-	return c.execute(ctx, Command{Name: "off"})
+	announceErr := c.announce(ctx)
+	if err := c.execute(ctx, Command{Name: "off", Frame: FrameOff()}); err != nil {
+		return err
+	}
+	return announceErr
 }
 
 func (c *Controller) SetInput(ctx context.Context, value string) error {
@@ -134,7 +138,7 @@ func (c *Controller) SetInput(ctx context.Context, value string) error {
 	c.cfg = cfg
 	c.mu.Unlock()
 	c.log.Info("user action: input " + normalized)
-	return c.execute(ctx, Command{Name: "input", Address: address})
+	return c.switchInput(ctx, address)
 }
 
 // Probe switches the TV to an input without saving it.
@@ -145,18 +149,50 @@ func (c *Controller) Probe(ctx context.Context, value string) error {
 	}
 	c.cancelAuto()
 	c.log.Info("user action: probe input " + normalized)
-	return c.execute(ctx, Command{Name: "input", Address: address})
+	return c.switchInput(ctx, address)
+}
+
+// SendFrame sends one raw CEC frame such as "4F:82:20:00" for experiments.
+func (c *Controller) SendFrame(ctx context.Context, text string) error {
+	frame, err := ParseFrame(text)
+	if err != nil {
+		return err
+	}
+	c.cancelAuto()
+	c.log.Info("user action: send " + FormatFrame(frame))
+	return c.execute(ctx, Command{Name: "raw", Frame: frame})
+}
+
+// switchInput registers the adapter at the input's physical address, then announces it as active.
+func (c *Controller) switchInput(ctx context.Context, address uint16) error {
+	reportErr := c.execute(ctx, Command{Name: "report", Frame: FrameReportPhysicalAddress(address)})
+	if err := c.execute(ctx, Command{Name: "active", Frame: FrameActiveSource(address)}); err != nil {
+		return err
+	}
+	return reportErr
+}
+
+// announce reports the saved input's physical address so the TV knows this device; no-op without one.
+func (c *Controller) announce(ctx context.Context) error {
+	c.mu.Lock()
+	input := c.cfg.Input
+	c.mu.Unlock()
+	if input == "" {
+		return nil
+	}
+	address, _, err := ParseAddress(input)
+	if err != nil {
+		return err
+	}
+	return c.execute(ctx, Command{Name: "report", Frame: FrameReportPhysicalAddress(address)})
 }
 
 func (c *Controller) sequence(ctx context.Context) error {
-	onErr := c.execute(ctx, Command{Name: "on"})
+	onErr := c.execute(ctx, Command{Name: "on", Frame: FrameOn()})
 	c.mu.Lock()
 	delay := time.Duration(c.cfg.InputDelayMS) * time.Millisecond
 	c.mu.Unlock()
 	if err := c.sleep(ctx, delay); err != nil {
-		if errors.Is(err, context.Canceled) {
-			return err
-		}
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -172,9 +208,8 @@ func (c *Controller) sequence(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	inputErr := c.execute(ctx, Command{Name: "input", Address: address})
-	if inputErr != nil {
-		return inputErr
+	if err := c.switchInput(ctx, address); err != nil {
+		return err
 	}
 	return onErr
 }

@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -24,7 +25,7 @@ func (d *fakeDevice) Execute(_ context.Context, c Command) (string, error) {
 	return "ack", nil
 }
 func (d *fakeDevice) Status() DeviceStatus {
-	return DeviceStatus{Connected: true, Firmware: "cec-host-0.6.0-test"}
+	return DeviceStatus{Connected: true, Firmware: "cec-host-0.7.0-test"}
 }
 func (d *fakeDevice) names() []string {
 	d.mu.Lock()
@@ -51,8 +52,8 @@ func TestAutomaticSequenceAndDedup(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	got := d.names()
-	if len(got) != 2 || got[0] != "on" || got[1] != "input" {
-		t.Fatalf("commands = %v", got)
+	if want := []string{"on", "report", "active"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("commands = %v, want %v", got, want)
 	}
 }
 
@@ -68,8 +69,8 @@ func TestOffCancelsDelayedInput(t *testing.T) {
 	}
 	time.Sleep(time.Millisecond)
 	got := d.names()
-	if len(got) != 2 || got[0] != "on" || got[1] != "off" {
-		t.Fatalf("commands = %v", got)
+	if want := []string{"on", "report", "off"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("commands = %v, want %v", got, want)
 	}
 }
 
@@ -79,7 +80,8 @@ func TestInputPersistsAndSends(t *testing.T) {
 	if err := c.SetInput(context.Background(), "HDMI3"); err != nil {
 		t.Fatal(err)
 	}
-	if store.cfg.Input != "3.0.0.0" || d.commands[0].Address != 0x3000 {
+	if store.cfg.Input != "3.0.0.0" || len(d.commands) != 2 ||
+		FormatFrame(d.commands[0].Frame) != "4F:84:30:00:04" || FormatFrame(d.commands[1].Frame) != "4F:82:30:00" {
 		t.Fatalf("config=%+v commands=%+v", store.cfg, d.commands)
 	}
 }

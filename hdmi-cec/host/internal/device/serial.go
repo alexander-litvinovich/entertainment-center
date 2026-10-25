@@ -2,6 +2,7 @@ package device
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -62,10 +63,7 @@ func (d *SerialDevice) Execute(ctx context.Context, command core.Command) (strin
 	if id == 0 {
 		id = d.nextID.Add(1)
 	}
-	line := fmt.Sprintf("cec submit %d %s", id, command.Name)
-	if command.Name == "input" {
-		line += " " + core.WireAddress(command.Address)
-	}
+	line := fmt.Sprintf("cec submit %d raw %s", id, hex.EncodeToString(command.Frame))
 	err := d.writeLine(line)
 	if err != nil {
 		// The handle goes stale when the adapter re-enumerates, e.g. after sleep.
@@ -164,8 +162,8 @@ func (d *SerialDevice) checkVersion(ctx context.Context) error {
 			if match != nil {
 				major, _ := strconv.Atoi(match[1])
 				minor, _ := strconv.Atoi(match[2])
-				if major != 0 || minor < 6 {
-					return fmt.Errorf("firmware protocol %s is too old; version 0.6.0 or newer is required", match[0])
+				if major != 0 || minor < 7 {
+					return fmt.Errorf("firmware protocol %s is too old; version 0.7.0 or newer is required", match[0])
 				}
 				d.firmware = match[0]
 				return nil

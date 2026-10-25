@@ -1,4 +1,4 @@
-# Запись прошивки 0.6.0 на XIAO RP2350
+# Запись прошивки 0.7.0 на XIAO RP2350
 
 ## 1. Собрать образ
 
@@ -51,17 +51,17 @@ python3 cec.py setup
 .venv/bin/python cec.py monitor --command "cec status 1"
 ```
 
-Версия должна начинаться с `cec-host-0.6.0`. После reset плата только инициализирует
-USB и CEC: она не включает ТВ, не выбирает вход и не передаёт Active Source.
+Версия должна начинаться с `cec-host-0.7.0`. После reset плата только инициализирует
+USB и CEC: она ничего не отправляет сама.
 
 Ручная проверка протокола:
 
 ```text
-cec submit 1 on
+cec submit 1 raw 4004
 cec status 1
-cec submit 2 input 2000
+cec submit 2 raw 4f822000
 cec status 2
-cec submit 3 off
+cec submit 3 raw 4036
 cec status 3
 ```
 
@@ -94,6 +94,6 @@ cec status 3
 - **Консоль не найдена.** Закройте программы, занявшие порт, и выполните
   `.venv/bin/python -m serial.tools.list_ports -v`.
 - **После записи ТВ включается от питания.** Проверьте `show version`: на плате осталась
-  старая `cec-wake-0.5.0`, повторите запись `cec-host-0.6.0`.
+  старая `cec-wake-0.5.0`, повторите запись `cec-host-0.7.0`.
 - **CEC-команда не действует.** Проверьте HDMI pins 13/17, CEC в меню ТВ и результат
   `cec status`. `nack` и `busy` — результат шины, а не подтверждение состояния экрана.

@@ -24,20 +24,17 @@ index 7dc04a3..f27b30f 100644
 +endif()
 diff --git a/include/cec-command.h b/include/cec-command.h
 new file mode 100644
-index 0000000..52999ed
+index 0000000..6f05be5
 --- /dev/null
 +++ b/include/cec-command.h
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,43 @@
 +#ifndef CEC_COMMAND_H
 +#define CEC_COMMAND_H
 +#include <stdbool.h>
++#include <stddef.h>
 +#include <stdint.h>
 +
-+typedef enum {
-+  CEC_COMMAND_ON,
-+  CEC_COMMAND_OFF,
-+  CEC_COMMAND_INPUT,
-+} cec_command_kind_t;
++#define CEC_COMMAND_MAX_LEN 16
 +
 +typedef enum {
 +  CEC_COMMAND_IDLE,
@@ -56,21 +53,20 @@ index 0000000..52999ed
 +} cec_command_result_t;
 +
 +typedef struct {
-+  uint8_t data[4];
++  uint8_t data[CEC_COMMAND_MAX_LEN];
 +  uint8_t len;
 +} cec_command_frame_t;
 +
 +typedef struct {
 +  uint32_t id;
-+  cec_command_kind_t kind;
-+  uint16_t physical_address;
++  cec_command_frame_t frame;
 +  cec_command_state_t state;
 +  cec_command_result_t result;
 +} cec_command_status_t;
 +
-+bool cec_command_valid_physical_address(uint16_t address);
-+bool cec_command_encode(cec_command_kind_t kind, uint16_t address, cec_command_frame_t *frame);
-+bool cec_command_submit(uint32_t id, cec_command_kind_t kind, uint16_t address);
++// A frame is valid when it is 1..16 bytes long and sent from logical address 4.
++bool cec_command_valid_frame(const uint8_t *data, size_t len);
++bool cec_command_submit(uint32_t id, const uint8_t *data, size_t len);
 +bool cec_command_snapshot(uint32_t id, cec_command_status_t *out);
 +const char *cec_command_state_name(cec_command_state_t state);
 +const char *cec_command_result_name(cec_command_result_t result);
@@ -130,10 +126,10 @@ index 95898d1..ebdcd71 100644
      // RGB
 diff --git a/src/cec-command-task.c b/src/cec-command-task.c
 new file mode 100644
-index 0000000..b8c8554
+index 0000000..f39f5bf
 --- /dev/null
 +++ b/src/cec-command-task.c
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,66 @@
 +#include "pico/stdlib.h"
 +#include "cec-command.h"
 +#include "cec-task.h"
@@ -141,16 +137,16 @@ index 0000000..b8c8554
 +static cec_command_status_t command_status;
 +static bool command_available;
 +
-+bool cec_command_submit(uint32_t id, cec_command_kind_t kind, uint16_t address) {
-+  cec_command_frame_t frame;
-+  if (id == 0 || !cec_command_encode(kind, address, &frame)) return false;
++bool cec_command_submit(uint32_t id, const uint8_t *data, size_t len) {
++  if (id == 0 || !cec_command_valid_frame(data, len)) return false;
 +  bool accepted = false;
 +  taskENTER_CRITICAL();
 +  if (!command_available && command_status.state != CEC_COMMAND_PENDING &&
 +      command_status.state != CEC_COMMAND_QUEUED) {
-+    command_status = (cec_command_status_t){.id = id, .kind = kind,
-+      .physical_address = address, .state = CEC_COMMAND_QUEUED,
-+      .result = CEC_COMMAND_ERROR};
++    command_status = (cec_command_status_t){.id = id, .state = CEC_COMMAND_QUEUED,
++                                            .result = CEC_COMMAND_ERROR};
++    for (size_t i = 0; i < len; ++i) command_status.frame.data[i] = data[i];
++    command_status.frame.len = (uint8_t)len;
 +    command_available = true;
 +    accepted = true;
 +  }
@@ -188,13 +184,10 @@ index 0000000..b8c8554
 +    taskEXIT_CRITICAL();
 +
 +    if (execute) {
-+      cec_command_frame_t frame;
-+      cec_command_result_t result = CEC_COMMAND_ERROR;
-+      if (cec_command_encode(current.kind, current.physical_address, &frame)) {
-+        cec_message_t message = {.len = frame.len};
-+        for (uint8_t i = 0; i < frame.len; ++i) message.data[i] = frame.data[i];
-+        result = (cec_command_result_t)cec_frame_send_result(&message, 10000);
-+      }
++      cec_message_t message = {.len = current.frame.len};
++      for (uint8_t i = 0; i < message.len; ++i) message.data[i] = current.frame.data[i];
++      cec_command_result_t result =
++          (cec_command_result_t)cec_frame_send_result(&message, 10000);
 +      taskENTER_CRITICAL();
 +      command_status.result = result;
 +      command_status.state = CEC_COMMAND_DONE;
@@ -205,47 +198,14 @@ index 0000000..b8c8554
 +}
 diff --git a/src/cec-command.c b/src/cec-command.c
 new file mode 100644
-index 0000000..54aa637
+index 0000000..71f2ea3
 --- /dev/null
 +++ b/src/cec-command.c
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,25 @@
 +#include "cec-command.h"
 +
-+bool cec_command_valid_physical_address(uint16_t address) {
-+  bool zero_seen = false;
-+  if (address == 0) return false;
-+  for (int shift = 12; shift >= 0; shift -= 4) {
-+    uint8_t nibble = (address >> shift) & 0x0f;
-+    if (zero_seen && nibble != 0) return false;
-+    if (nibble == 0) zero_seen = true;
-+  }
-+  return true;
-+}
-+
-+bool cec_command_encode(cec_command_kind_t kind, uint16_t address, cec_command_frame_t *frame) {
-+  if (!frame) return false;
-+  *frame = (cec_command_frame_t){0};
-+  switch (kind) {
-+    case CEC_COMMAND_ON:
-+      frame->data[0] = 0x40;
-+      frame->data[1] = 0x04;
-+      frame->len = 2;
-+      return true;
-+    case CEC_COMMAND_OFF:
-+      frame->data[0] = 0x40;
-+      frame->data[1] = 0x36;
-+      frame->len = 2;
-+      return true;
-+    case CEC_COMMAND_INPUT:
-+      if (!cec_command_valid_physical_address(address)) return false;
-+      frame->data[0] = 0x4f;
-+      frame->data[1] = 0x86;
-+      frame->data[2] = address >> 8;
-+      frame->data[3] = address;
-+      frame->len = 4;
-+      return true;
-+  }
-+  return false;
++bool cec_command_valid_frame(const uint8_t *data, size_t len) {
++  return data && len >= 1 && len <= CEC_COMMAND_MAX_LEN && (data[0] >> 4) == 4;
 +}
 +
 +const char *cec_command_state_name(cec_command_state_t state) {
@@ -791,7 +751,7 @@ index 26518cf..c63cc39 100644
 +  cec_log_submitf("%s ack=%u %s"_LOG_BR, recv ? "RX" : "TX", frame->ack, data);
  }
 diff --git a/src/usb-cdc.c b/src/usb-cdc.c
-index d2bbc80..642f637 100644
+index d2bbc80..db22af2 100644
 --- a/src/usb-cdc.c
 +++ b/src/usb-cdc.c
 @@ -12,6 +12,11 @@
@@ -806,7 +766,7 @@ index d2bbc80..642f637 100644
  #include "ddc.h"
  #include "nvs.h"
  #include "tclie.h"
-@@ -99,6 +104,107 @@ static int exec_reboot(void *arg, int argc, const char **argv) {
+@@ -99,6 +104,99 @@ static int exec_reboot(void *arg, int argc, const char **argv) {
    return -1;
  }
  
@@ -876,31 +836,23 @@ index d2bbc80..642f637 100644
 +    return 0;
 +  }
 +
-+  if (argc >= 4 && strcmp(argv[1], "submit") == 0 && parse_request_id(argv[2], &id)) {
-+    cec_command_kind_t kind = CEC_COMMAND_ON;
-+    uint16_t address = 0;
-+    bool valid = false;
-+    if (argc == 4 && strcmp(argv[3], "on") == 0) {
-+      kind = CEC_COMMAND_ON;
-+      valid = true;
-+    } else if (argc == 4 && strcmp(argv[3], "off") == 0) {
-+      kind = CEC_COMMAND_OFF;
-+      valid = true;
-+    } else if (argc == 5 && strcmp(argv[3], "input") == 0 && strlen(argv[4]) == 4) {
++  if (argc == 5 && strcmp(argv[1], "submit") == 0 && strcmp(argv[3], "raw") == 0 &&
++      parse_request_id(argv[2], &id)) {
++    uint8_t data[CEC_COMMAND_MAX_LEN];
++    size_t hex_len = strlen(argv[4]);
++    bool valid = hex_len >= 2 && hex_len <= 2 * CEC_COMMAND_MAX_LEN && hex_len % 2 == 0;
++    for (size_t i = 0; valid && i < hex_len / 2; ++i) {
 +      unsigned value;
 +      char tail;
-+      if (sscanf(argv[4], "%4x%c", &value, &tail) == 1 && value <= UINT16_MAX &&
-+          cec_command_valid_physical_address((uint16_t)value)) {
-+        kind = CEC_COMMAND_INPUT;
-+        address = (uint16_t)value;
-+        valid = true;
-+      }
++      char pair[3] = {argv[4][2 * i], argv[4][2 * i + 1], 0};
++      valid = sscanf(pair, "%2x%c", &value, &tail) == 1;
++      data[i] = (uint8_t)value;
 +    }
-+    if (!valid) {
++    if (!valid || !cec_command_valid_frame(data, hex_len / 2)) {
 +      cdc_printfln("@cec id=%lu state=rejected result=error", (unsigned long)id);
 +      return 0;
 +    }
-+    if (!cec_command_submit(id, kind, address)) {
++    if (!cec_command_submit(id, data, hex_len / 2)) {
 +      cdc_printfln("@cec id=%lu state=rejected result=busy", (unsigned long)id);
 +      return 0;
 +    }
@@ -914,7 +866,7 @@ index d2bbc80..642f637 100644
  static void print_edid_delay(uint32_t delay) {
    cdc_printfln("%-17s: %lu ms", "EDID delay", delay);
  }
-@@ -256,6 +362,10 @@ static int exec_show(void *arg, int argc, const char **argv) {
+@@ -256,6 +354,10 @@ static int exec_show(void *arg, int argc, const char **argv) {
  }
  
  static int exec_query(void *arg, int argc, const char **argv) {
@@ -925,7 +877,7 @@ index d2bbc80..642f637 100644
    if (argc == 2) {
      if (strcmp(argv[1], "edid") == 0) {
        print_physical_address(ddc_get_physical_address());
-@@ -401,7 +511,7 @@ static int exec_send(void *arg, int argc, const char **argv) {
+@@ -401,7 +503,7 @@ static int exec_send(void *arg, int argc, const char **argv) {
        if (cec_send_msg(&msg)) {
          return 0;
        }
@@ -934,7 +886,7 @@ index d2bbc80..642f637 100644
        return -1;
      }
      cdc_printfln("Error parsing opcode");
-@@ -410,6 +520,10 @@ static int exec_send(void *arg, int argc, const char **argv) {
+@@ -410,6 +512,10 @@ static int exec_send(void *arg, int argc, const char **argv) {
  }
  
  static const tclie_cmd_t cmds[] = {

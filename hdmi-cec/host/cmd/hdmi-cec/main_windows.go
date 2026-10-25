@@ -48,6 +48,11 @@ func run(args []string) error {
 			return usage()
 		}
 		return send(ipc.Request{Command: strings.ToLower(args[0])})
+	case "send":
+		if len(args) < 2 {
+			return usage()
+		}
+		return send(ipc.Request{Command: "send", Input: strings.Join(args[1:], " ")})
 	case "input":
 		if len(args) != 2 {
 			return usage()
@@ -88,5 +93,5 @@ func send(request ipc.Request) error {
 	return nil
 }
 func usage() error {
-	return fmt.Errorf("usage: hdmi-cec <on|off|input HDMI1..HDMI4|input 2.1.0.0|status|setup|run [--auto] [--config file]|install|uninstall|service>")
+	return fmt.Errorf("usage: hdmi-cec <on|off|input HDMI1..HDMI4|input 2.1.0.0|send 4F:82:20:00|status|setup|run [--auto] [--config file]|install|uninstall|service>")
 }

@@ -45,5 +45,3 @@ func ParseAddress(value string) (uint16, string, error) {
 func FormatAddress(address uint16) string {
 	return fmt.Sprintf("%X.%X.%X.%X", address>>12, address>>8&15, address>>4&15, address&15)
 }
-
-func WireAddress(address uint16) string { return fmt.Sprintf("%04x", address) }

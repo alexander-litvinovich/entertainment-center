@@ -791,20 +791,21 @@ index 26518cf..c63cc39 100644
 +  cec_log_submitf("%s ack=%u %s"_LOG_BR, recv ? "RX" : "TX", frame->ack, data);
  }
 diff --git a/src/usb-cdc.c b/src/usb-cdc.c
-index d2bbc80..b950481 100644
+index d2bbc80..31d1996 100644
 --- a/src/usb-cdc.c
 +++ b/src/usb-cdc.c
-@@ -12,6 +12,9 @@
+@@ -12,6 +12,10 @@
  #include "cec-frame.h"
  #include "cec-log.h"
  #include "cec-task.h"
 +#ifdef CEC_HOST_DRIVEN
 +#include "cec-command.h"
++#include "pico/time.h"
 +#endif
  #include "ddc.h"
  #include "nvs.h"
  #include "tclie.h"
-@@ -99,6 +102,69 @@ static int exec_reboot(void *arg, int argc, const char **argv) {
+@@ -99,6 +103,83 @@ static int exec_reboot(void *arg, int argc, const char **argv) {
    return -1;
  }
  
@@ -820,6 +821,20 @@ index d2bbc80..b950481 100644
 +static int exec_cec(void *arg, int argc, const char **argv) {
 +  (void)arg;
 +  uint32_t id;
++  if (argc == 2 && strcmp(argv[1], "line") == 0) {
++    // Diagnostic: sample the CEC line for 200 ms.
++    unsigned high = 0, edges = 0;
++    bool previous = cec_frame_line_high();
++    for (int i = 0; i < 2000; ++i) {
++      bool level = cec_frame_line_high();
++      high += level;
++      edges += level != previous;
++      previous = level;
++      busy_wait_us(100);
++    }
++    cdc_printfln("@cec line high=%u/2000 edges=%u", high, edges);
++    return 0;
++  }
 +  if (argc == 3 && strcmp(argv[1], "status") == 0 && parse_request_id(argv[2], &id)) {
 +    cec_command_status_t status;
 +    if (!cec_command_snapshot(id, &status)) {
@@ -874,7 +889,7 @@ index d2bbc80..b950481 100644
  static void print_edid_delay(uint32_t delay) {
    cdc_printfln("%-17s: %lu ms", "EDID delay", delay);
  }
-@@ -256,6 +322,10 @@ static int exec_show(void *arg, int argc, const char **argv) {
+@@ -256,6 +337,10 @@ static int exec_show(void *arg, int argc, const char **argv) {
  }
  
  static int exec_query(void *arg, int argc, const char **argv) {
@@ -885,7 +900,7 @@ index d2bbc80..b950481 100644
    if (argc == 2) {
      if (strcmp(argv[1], "edid") == 0) {
        print_physical_address(ddc_get_physical_address());
-@@ -401,7 +471,7 @@ static int exec_send(void *arg, int argc, const char **argv) {
+@@ -401,7 +486,7 @@ static int exec_send(void *arg, int argc, const char **argv) {
        if (cec_send_msg(&msg)) {
          return 0;
        }
@@ -894,7 +909,7 @@ index d2bbc80..b950481 100644
        return -1;
      }
      cdc_printfln("Error parsing opcode");
-@@ -410,6 +480,10 @@ static int exec_send(void *arg, int argc, const char **argv) {
+@@ -410,6 +495,10 @@ static int exec_send(void *arg, int argc, const char **argv) {
  }
  
  static const tclie_cmd_t cmds[] = {

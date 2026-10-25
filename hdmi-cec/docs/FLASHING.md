@@ -65,8 +65,10 @@ cec submit 3 off
 cec status 3
 ```
 
-Проверка линии CEC (200 мс): `cec line`. Ответ `@cec line high=2000/2000 edges=0` — линия
-подтянута ТВ; `high=0/2000` — линия постоянно низкая, команды завершатся `busy`/`collision`.
+Диагностика линии CEC: `cec line` измеряет её 200 мс. `high=2000/2000` — линия подтянута ТВ;
+`high=0/2000` — подтяжки нет, команды завершатся `busy`/`collision`. Для эксперимента
+`cec pullup on|off` включает внутреннюю подтяжку пина до сброса; результат `nack` значит,
+что на шине никто не подтверждает кадры.
 
 Ответы имеют вид `@cec id=1 state=queued`, затем
 `@cec id=1 state=done result=ack|nack|busy|timeout|collision|error`.

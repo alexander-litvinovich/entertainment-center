@@ -24,6 +24,8 @@ const (
 	pbtAPMResumeAutomatic = 0x12
 	// Windows does not wait for a service to handle suspend, and waits only seconds at shutdown.
 	standbyTimeout = 5 * time.Second
+	// Windows holds the suspend while the callback runs; keep it short.
+	suspendTimeout = 3 * time.Second
 )
 
 type eventLogger struct{ log *eventlog.Log }
@@ -80,6 +82,20 @@ func (h serviceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, s
 		defer cancelStandby()
 		_ = controller.HandlePowerEvent(standbyCtx, event, detail)
 	}
+	// The SCM power event arrives too late to send Standby before suspend, so a
+	// synchronous callback handles sleep; the SCM event is only the fallback.
+	syncSuspend := false
+	if unregister, err := registerSuspendHandler(func() {
+		logger.Info("suspend callback received")
+		suspendCtx, cancelSuspend := context.WithTimeout(ctx, suspendTimeout)
+		defer cancelSuspend()
+		_ = controller.HandlePowerEvent(suspendCtx, core.Sleep, "suspend callback")
+	}); err != nil {
+		logger.Error("register suspend callback, falling back to SCM power events: " + err.Error())
+	} else {
+		syncSuspend = true
+		defer unregister()
+	}
 	// Preshutdown makes SCM wait until the service stops, so Standby goes out before power-off.
 	accepted := svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPreShutdown | svc.AcceptPowerEvent
 	statuses <- svc.Status{State: svc.Running, Accepts: accepted}
@@ -106,7 +122,9 @@ func (h serviceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, s
 			case pbtAPMResumeAutomatic:
 				_ = controller.HandlePowerEvent(ctx, core.Wake, "resume automatic")
 			case pbtAPMSuspend:
-				standby(core.Sleep, "suspend")
+				if !syncSuspend {
+					standby(core.Sleep, "suspend")
+				}
 			}
 		case svc.PreShutdown, svc.Shutdown:
 			statuses <- svc.Status{State: svc.StopPending, WaitHint: uint32((standbyTimeout + time.Second).Milliseconds())}

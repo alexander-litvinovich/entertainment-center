@@ -77,6 +77,25 @@ func TestUpdateSkipsWhenCurrent(t *testing.T) {
 	}
 }
 
+func TestForceUpdateReinstallsLatest(t *testing.T) {
+	data := []byte("new binary")
+	sum := sha256.Sum256(data)
+	srv := server(t, data, hex.EncodeToString(sum[:]))
+	for _, current := range []string{"0.10.0", "0.11.0", "dev"} {
+		exe := filepath.Join(t.TempDir(), "hdmi-cec.exe")
+		os.WriteFile(exe, []byte("old binary"), 0o755)
+		u := updater(srv, current)
+		u.Force = true
+		release, updated, err := u.Update(context.Background(), exe)
+		if err != nil || !updated || release.Tag != "hdmi-cec-v0.10.0" {
+			t.Fatalf("%s: got %+v %v %v", current, release, updated, err)
+		}
+		if got, _ := os.ReadFile(exe); string(got) != "new binary" {
+			t.Fatalf("%s: exe = %q", current, got)
+		}
+	}
+}
+
 func TestUpdateRejectsChecksumMismatch(t *testing.T) {
 	srv := server(t, []byte("tampered"), hex.EncodeToString(make([]byte, 32)))
 	exe := filepath.Join(t.TempDir(), "hdmi-cec.exe")

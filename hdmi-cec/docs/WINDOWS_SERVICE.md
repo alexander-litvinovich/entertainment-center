@@ -171,13 +171,14 @@ version. That restart sends no CEC commands; a running on → input sequence fin
 
 ```powershell
 hdmi-cec version   # version of this EXE
-hdmi-cec update    # check and install now, through the service
+hdmi-cec update            # check and install now, through the service
+hdmi-cec update --force    # reinstall the latest release even if this version is current
 ```
 
 To turn automatic checks off, add `"autoUpdate": false` to
 `%ProgramData%\HdmiCecHost\config.json` and restart the service; `update` still works.
-Builds without a release version (`version` prints `dev`) never update. Results are written to
-the Event Log.
+Builds without a release version (`version` prints `dev`) update only with `--force`. Results are
+written to the Event Log.
 
 Firmware is not updated automatically; flash it from a Mac
 ([FLASHING.md](FLASHING.md)).

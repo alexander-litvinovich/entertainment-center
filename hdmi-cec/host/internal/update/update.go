@@ -38,6 +38,8 @@ type Updater struct {
 	APIBase string // https://api.github.com unless testing
 	Repo    string
 	Client  *http.Client
+	// Force installs the latest release even when it is not newer, including over dev builds.
+	Force bool
 }
 
 func New(current string) Updater {
@@ -115,11 +117,11 @@ func (u Updater) Latest(ctx context.Context) (Release, error) {
 	return best, nil
 }
 
-// Update installs the latest release over exe when it is newer than u.Current.
+// Update installs the latest release over exe when it is newer than u.Current, or always with Force.
 // It returns the release it found and whether exe was replaced.
 func (u Updater) Update(ctx context.Context, exe string) (Release, bool, error) {
 	current, ok := ParseVersion(u.Current)
-	if !ok {
+	if !ok && !u.Force {
 		return Release{}, false, fmt.Errorf("version %q is a development build; updates are disabled", u.Current)
 	}
 	release, err := u.Latest(ctx)
@@ -127,7 +129,7 @@ func (u Updater) Update(ctx context.Context, exe string) (Release, bool, error) 
 		return Release{}, false, err
 	}
 	latest, _ := ParseVersion(release.Version)
-	if !newer(latest, current) {
+	if !u.Force && !newer(latest, current) {
 		return release, false, nil
 	}
 	sums, err := u.get(ctx, release.sumsURL, 64<<10)

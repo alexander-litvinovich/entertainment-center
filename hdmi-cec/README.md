@@ -75,7 +75,7 @@ Without a saved input the setup first asks for the TV input number, or detects i
 switching the TV through HDMI1…HDMI4. Open it again any time with `hdmi-cec setup`.
 
 User commands: `setup`, `on`, `off`, `input HDMI1`…`HDMI4`, `input 2.1.0.0`, `status`,
-`update`, `version`. Full installation and diagnostics guide:
+`update` (`--force` reinstalls the latest release), `version`. Full installation and diagnostics guide:
 [docs/WINDOWS_SERVICE.md](docs/WINDOWS_SERVICE.md).
 
 The service turns the TV on when Windows starts or wakes from sleep, selects the saved input

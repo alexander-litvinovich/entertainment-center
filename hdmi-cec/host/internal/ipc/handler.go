@@ -10,8 +10,8 @@ import (
 // Handler executes CLI requests against the controller.
 type Handler struct {
 	Controller *core.Controller
-	// Update installs a newer release; nil when the host cannot update itself.
-	Update func(context.Context) (string, error)
+	// Update installs a newer release, or the latest one with force; nil when the host cannot update itself.
+	Update func(ctx context.Context, force bool) (string, error)
 }
 
 func (h Handler) Handle(ctx context.Context, req Request) Response {
@@ -22,7 +22,7 @@ func (h Handler) Handle(ctx context.Context, req Request) Response {
 		if h.Update == nil {
 			err = errors.New("update runs only in the installed service")
 		} else {
-			message, err = h.Update(ctx)
+			message, err = h.Update(ctx, req.Force)
 		}
 	case "on":
 		err = h.Controller.ManualOn(ctx)

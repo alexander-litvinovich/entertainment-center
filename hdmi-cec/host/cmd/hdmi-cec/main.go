@@ -41,11 +41,18 @@ func run(args []string) error {
 	case "version":
 		fmt.Println(version)
 		return nil
-	case "on", "off", "status", "update":
+	case "on", "off", "status":
 		if len(args) != 1 {
 			return usage()
 		}
 		return send(ipc.Request{Command: strings.ToLower(args[0])})
+	case "update":
+		flags := flag.NewFlagSet("update", flag.ContinueOnError)
+		force := flags.Bool("force", false, "reinstall the latest release even if this version is current")
+		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
+			return usage()
+		}
+		return send(ipc.Request{Command: "update", Force: *force})
 	case "send":
 		if len(args) < 2 {
 			return usage()
@@ -159,7 +166,8 @@ func usage() error {
   on | off                            turn the TV on (then select the input) | standby
   input HDMI1..HDMI4 | 2.1.0.0        save the input and switch the TV to it
   send 4F:82:20:00                    send one raw CEC frame
-  status | update | version
+  update [--force]                    install a newer release now; --force reinstalls the latest
+  status | version
   run [--auto] [--dry-run] [--config file]
                                       host in this terminal instead of the service
   install | uninstall | service       Windows service (install/uninstall need an elevated shell)`)

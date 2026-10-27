@@ -5,6 +5,7 @@ import "hdmi-cec-host/internal/core"
 type Request struct {
 	Command string       `json:"command"`
 	Input   string       `json:"input,omitempty"`
+	Force   bool         `json:"force,omitempty"`
 	Config  *core.Config `json:"config,omitempty"`
 }
 

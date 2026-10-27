@@ -35,15 +35,18 @@ func newAutoUpdater(configPath string, log core.Logger) *autoUpdater {
 	return &autoUpdater{configPath: configPath, log: log, restart: make(chan struct{}, 1)}
 }
 
-// Run checks GitHub once and installs a newer release; the service restarts afterwards.
-func (a *autoUpdater) Run(ctx context.Context) (string, error) {
+// Run checks GitHub once and installs a newer release, or the latest one with force;
+// the service restarts afterwards.
+func (a *autoUpdater) Run(ctx context.Context, force bool) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
-	release, updated, err := update.New(Version).Update(ctx, exe)
+	updater := update.New(Version)
+	updater.Force = force
+	release, updated, err := updater.Update(ctx, exe)
 	if err != nil {
 		return "", err
 	}
@@ -71,7 +74,7 @@ func (a *autoUpdater) loop(ctx context.Context) {
 		if err == nil && !cfg.AutoUpdateEnabled() {
 			continue
 		}
-		message, err := a.Run(ctx)
+		message, err := a.Run(ctx, false)
 		if err != nil {
 			a.log.Error("auto-update: " + err.Error())
 			continue
